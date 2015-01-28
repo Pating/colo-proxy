@@ -1347,9 +1347,7 @@ static void colo_primary_cleanup_conn(struct nf_conn_colo *conn)
 
 	list_for_each_entry_safe(e, n, &conn->entry_list, list) {
 		list_del_init(&e->list);
-		nf_queue_entry_release_refs(e);
-		kfree_skb(e->skb);
-		kfree(e);
+		nf_reinject(e, NF_STOP);
 	}
 
 	__skb_queue_purge(&conn->slaver_pkt_queue);
