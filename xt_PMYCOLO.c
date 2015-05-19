@@ -720,14 +720,18 @@ static int colo_enqueue_tcp_packet(struct nf_conn_colo *conn,
 	/* Reopen? */
 	if ((proto->p.mrcv_nxt == 0) || (th->syn && cb->seq_end != proto->p.mrcv_nxt)) {
 		/* Init */
+		bool reopen = !!proto->p.mrcv_nxt;
 		proto->p.srcv_nxt = proto->p.mrcv_nxt = cb->seq_end;
 		proto->p.sack = proto->p.mack = cb->ack;
 		proto->p.compared_seq = cb->seq;
 		pr_dbg("syn %d, seq_end %u, rcv_nxt is %u\n",
 			th->syn, cb->seq_end, proto->p.mrcv_nxt);
-		if (th->syn && (conn->flags & COLO_CONN_SYN_RECVD)) {
+		if (!reopen && th->syn && (conn->flags & COLO_CONN_SYN_RECVD)) {
 			nf_reinject(entry, NF_STOP);
 		} else {
+			if (reopen && th->syn
+				&& (conn->flags & COLO_CONN_SYN_RECVD))
+				conn->flags &= ~COLO_CONN_SYN_RECVD;
 			list_add_tail(&entry->list, &conn->entry_list);
 		}
 		return 0;
