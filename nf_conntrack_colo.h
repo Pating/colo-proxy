@@ -4,6 +4,7 @@
  * Copyright (c) 2014, 2015 Intel Corporation.
  *
  * Authors:
+ *  Zhang Hailiang <zhang.zhanghailiang@huawei.com>
  *  Gao feng <gaofeng@cn.fujitsu.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -48,12 +49,9 @@ struct nf_conn_colo {
 	spinlock_t		lock;
 	spinlock_t		chk_lock;
 	u32			flags;
-	u32			index;
+	u32			vm_pid; /* Distinguish which VM it belongs to .*/
 	char			proto[];
 };
-
-/* COLO netlink socket */
-extern struct sock *colo_sock;
 
 static inline
 struct nf_conn_colo *nfct_colo(const struct nf_conn *ct)
@@ -64,11 +62,4 @@ struct nf_conn_colo *nfct_colo(const struct nf_conn *ct)
 struct nf_conn_colo *
 nf_ct_colo_get(struct sk_buff *skb, struct colo_node *node, u32 flag);
 
-struct colo_node *colo_node_find(u32 index);
-
-struct colo_node *colo_node_find_get(u32 index);
-
-int colo_node_register(struct colo_node *colo);
-
-void colo_node_unregister(struct colo_node *colo);
 #endif

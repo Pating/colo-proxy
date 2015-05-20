@@ -7,6 +7,7 @@
  *
  * Authors:
  *  Gao feng <gaofeng@cn.fujitsu.com>
+ *  Zhang Hailiang <zhang.zhanghailiang@huawei.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -26,9 +27,10 @@
 #include <net/arp.h>
 #include <net/tcp.h>
 #include <linux/icmp.h>
+#include <linux/version.h>
 #include "xt_COLO.h"
 #include "nf_conntrack_colo.h"
-#include <linux/version.h>
+#include "nfnetlink_colo.h"
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Gao feng <gaofeng@cn.fujitsu.com>");
@@ -108,8 +110,6 @@ static bool colo_compare_skb(struct sk_buff *skb,
 
 	return true;
 }
-
-static int colo_send_checkpoint_req(struct colo_primary *colo);
 
 static void 
 __colo_compare_common(struct colo_primary *colo,
@@ -650,7 +650,7 @@ static int kcolo_thread(void *dummy)
 		nf_conntrack_put(conn->nfct);
 	}
 
-	pr_dbg("colo thread exit\n");
+	pr_dbg("kcolo_thread %d exit\n", node->vm_pid);
 	return 0;
 }
 
@@ -828,10 +828,11 @@ static int colo_enqueue_packet(struct nf_queue_entry *entry, unsigned int ptr)
 		return -1;
 	}
 
-	rcu_read_lock();
-	node = colo_node_find(conn->index);
-	BUG_ON(node == NULL);
-
+	node = colo_node_get(conn->vm_pid);
+	if (!node) {
+		pr_dbg("%s: Could not find node: %d\n",__func__, conn->vm_pid);
+		return -1;
+	}
 	switch (entry->pf) {
 	case NFPROTO_IPV4:
 		skb->protocol = htons(ETH_P_IP);
@@ -866,7 +867,7 @@ static int colo_enqueue_packet(struct nf_queue_entry *entry, unsigned int ptr)
 	spin_unlock_bh(&conn->lock);
 
 	if (ret < 0) {
-		rcu_read_unlock();
+		colo_node_put (node);
 		return ret;
 	}
 
@@ -875,7 +876,7 @@ static int colo_enqueue_packet(struct nf_queue_entry *entry, unsigned int ptr)
 	wake_up_interruptible(&node->u.p.wait);
 	spin_unlock_bh(&node->lock);
 
-	rcu_read_unlock();
+	colo_node_put(node);
 
 	return 0;
 }
@@ -1020,10 +1021,8 @@ colo_slaver_enqueue_udp_packet(struct nf_conn_colo *conn,
 	}
 
 	__skb_queue_tail(&conn->slaver_pkt_queue, skb);
-
 	return NF_STOLEN;
 }
-
 
 static unsigned int
 colo_slaver_enqueue_packet(struct nf_conn_colo *conn,
@@ -1150,7 +1149,7 @@ colo_slaver_queue_hook(const struct nf_hook_ops *ops, struct sk_buff *skb,
 
 	if (ct == NULL) {
 		pr_dbg("slaver can't find master's conntrack\n");
-		goto out;
+		goto out_unlock;
 	}
 
 	skb->nfct = &ct->ct_general;
@@ -1159,12 +1158,12 @@ colo_slaver_queue_hook(const struct nf_hook_ops *ops, struct sk_buff *skb,
 	if (conn == NULL) {
 		/* this is rare, since conntrack is created when client's first packet coming */
 		pr_dbg("no colo conn\n");
-		goto out;
+		goto out_unlock;
 	}
 
-	node = colo_node_find(conn->index);
+	node = colo_node_get(conn->vm_pid);
 	if (node == NULL) {
-		pr_dbg("colo primary node has gone\n");
+		pr_dbg("Try to find node %d, colo primary node has gone\n", conn->vm_pid);
 		goto out;
 	}
 
@@ -1180,6 +1179,8 @@ colo_slaver_queue_hook(const struct nf_hook_ops *ops, struct sk_buff *skb,
 	wake_up_interruptible(&node->u.p.wait);
 	spin_unlock_bh(&node->lock);
 out:
+	colo_node_put(node);
+out_unlock:
 	rcu_read_unlock();
 	return ret;
 }
@@ -1265,7 +1266,7 @@ static void colo_tcp_do_checkpoint(struct nf_conn_colo *conn)
 	spin_unlock_bh(&conn->lock);
 }
 
-static void __colo_do_checkpoint(struct nf_conn_colo *conn)
+static void colo_other_do_checkpoint(struct nf_conn_colo *conn)
 {
 	struct nf_queue_entry *e, *n;
 
@@ -1276,146 +1277,59 @@ static void __colo_do_checkpoint(struct nf_conn_colo *conn)
 	}
 
 	spin_unlock_bh(&conn->lock);
-
 	skb_queue_purge(&conn->slaver_pkt_queue);
 }
 
-/*
- * guest has stopped now. no network output now.
- */
-static void colo_do_checkpoint(struct colo_node *node)
+static int primary_do_checkpoint(struct colo_node *node)
 {
 	struct colo_primary *colo = &node->u.p;
-	struct nf_conn_colo *conn = NULL;
 
 	pr_dbg("master starts checkpoint, send all skb out\n");
-
 	colo->checkpoint = true;
+
 	spin_lock_bh(&node->lock);
 	list_splice_init(&node->wait_list, &node->conn_list);
 
-next:
-	if (!list_empty(&node->conn_list)) {
-		conn = list_first_entry(&node->conn_list,
-					struct nf_conn_colo,
-					conn_list);
+	while(!list_empty (&node->conn_list)) {
+		struct nf_conn_colo *conn = list_first_entry (&node->conn_list,
+		                         struct nf_conn_colo,
+		                         conn_list);
 
-		nf_conntrack_get(conn->nfct);
-		list_move_tail(&conn->conn_list, &node->wait_list);
-		spin_unlock_bh(&node->lock);
-	} else {
-		spin_unlock_bh(&node->lock);
-		colo->checkpoint = false;
-		return;
+		nf_conntrack_get (conn->nfct);
+		list_move_tail (&conn->conn_list, &node->wait_list);
+		spin_unlock_bh (&node->lock);
+
+		if (need_resched()) {
+			pr_dbg ("colo do checkpoint need resched\n");
+			schedule();
+			pr_dbg ("colo do checkpoint come back\n");
+		}
+
+		spin_lock (&conn->chk_lock);
+		if (nf_ct_protonum ( (struct nf_conn *) conn->nfct) == IPPROTO_TCP) {
+			colo_tcp_do_checkpoint (conn);
+		} else {
+			colo_other_do_checkpoint (conn);
+		}
+		spin_unlock (&conn->chk_lock);
+		nf_conntrack_put (conn->nfct);
+
+		spin_lock_bh (&node->lock);
 	}
-
-	if (need_resched()) {
-		pr_dbg("colo do checkpoint need resched\n");
-		schedule();
-		pr_dbg("colo do checkpoint come back\n");
-	}
-
-	spin_lock(&conn->chk_lock);
-	if (nf_ct_protonum((struct nf_conn *)conn->nfct) == IPPROTO_TCP)
-		colo_tcp_do_checkpoint(conn);
-	else
-		__colo_do_checkpoint(conn);
-	spin_unlock(&conn->chk_lock);
-	nf_conntrack_put(conn->nfct);
-
-	spin_lock_bh(&node->lock);
-	goto next;
+	spin_unlock_bh (&node->lock);
+	colo->checkpoint = false;
+	return 0;
 }
-
-static int colo_send_checkpoint_req(struct colo_primary *colo)
-{
-	struct sk_buff *skb;
-	struct nlmsghdr *nlh;
-	struct colomsg *cm;
-	int portid, ret;
-	struct colo_node *node = container_of(colo, struct colo_node, u.p);
-
-	colo->checkpoint = true;
-
-	portid = node->index;
-	skb = netlink_alloc_skb(colo_sock,
-				nlmsg_total_size(sizeof(*cm)),
-				portid,
-				GFP_KERNEL);
-	if (skb == NULL)
-		return -ENOMEM;
-
-	nlh = __nlmsg_put(skb, portid, 0, COLO_QUERY_CHECKPOINT,
-			  sizeof(struct colomsg), 0);
-
-	cm = nlmsg_data(nlh);
-	cm->checkpoint = true;
-
-	ret = netlink_unicast(colo_sock, skb, portid, MSG_DONTWAIT);
-	return ret >= 0 ? 0 : ret;
-
-}
-
 static void colo_setup_checkpoint_by_id(u32 id) {
 	struct colo_node *node;
 
-	rcu_read_lock();
-	node = colo_node_find(id);
+	node = colo_node_get(id);
 	if (node) {
 		pr_dbg("mark %d, find colo_primary %p, setup checkpoint\n",
 			id, node);
 		colo_send_checkpoint_req(&node->u.p);
 	}
-	rcu_read_unlock();
-}
-
-static int colo_should_checkpoint(struct colo_node *node,
-				  struct sk_buff *in_skb,
-				  struct nlmsghdr *in_nlh)
-{
-	struct sk_buff *skb;
-	struct nlmsghdr *nlh;
-	struct colomsg *cm;
-	int portid, ret;
-	struct colo_primary *colo = &node->u.p;
-
-	portid = NETLINK_CB(in_skb).portid;
-
-	skb = netlink_alloc_skb(colo_sock,
-				nlmsg_total_size(sizeof(*cm)),
-				portid,
-				GFP_KERNEL);
-	if (skb == NULL)
-		return -ENOMEM;
-
-	nlh = __nlmsg_put(skb, portid, in_nlh->nlmsg_seq,
-			  COLO_QUERY_CHECKPOINT,
-			  sizeof(struct colomsg), 0);
-
-	cm = nlmsg_data(nlh);
-	cm->checkpoint = colo->checkpoint;
-
-	ret = netlink_unicast(in_skb->sk, skb, portid, MSG_DONTWAIT);
-	return ret >= 0 ? 0 : ret;
-}
-
-static int colo_primary_receive(void *node,
-				struct sk_buff *skb,
-				struct nlmsghdr *nlh)
-{
-	switch (nlh->nlmsg_type) {
-		/* GUEST comes into colo mode */
-		case COLO_QUERY_CHECKPOINT:
-			return colo_should_checkpoint(node, skb, nlh);
-		/* guest stopped, do checkpoint */
-		case COLO_CHECKPOINT:
-			colo_do_checkpoint(node);
-			return 0;
-		default:
-			break;
-	}
-
-	return -1;
+        colo_node_put(node);
 }
 
 static void colo_primary_cleanup_conn(struct nf_conn_colo *conn)
@@ -1443,10 +1357,9 @@ static void colo_primary_destroy_node(struct colo_node *node)
 	struct nf_conn_colo *conn = NULL;
 	struct task_struct *task;
 
-	node->func = NULL;
-	node->notify = NULL;
-
 	spin_lock_bh(&node->lock);
+	node->destroy_notify_cb = NULL;
+
 	task = node->u.p.task;
 	if (task)
 		node->u.p.task = NULL;
@@ -1469,8 +1382,8 @@ next:
 		spin_unlock_bh(&node->lock);
 	} else {
 		spin_unlock_bh(&node->lock);
-		colo_node_unregister(node);
 		module_put(THIS_MODULE);
+		colo_node_destroy(node);
 		return;
 	}
 
@@ -1481,7 +1394,7 @@ next:
 	goto next;
 }
 
-static void colo_primary_destroy(void *node)
+static void colo_primary_destroy(struct colo_node *node)
 {
 	colo_primary_destroy_node(node);
 }
@@ -1493,27 +1406,25 @@ static int colo_primary_tg_check(const struct xt_tgchk_param *par)
 	struct colo_node *node;
 	int ret = 0;
 
-	if (info->index >= COLO_NODES_NUM)
-		return -EINVAL;
-
-	node = colo_node_find_get(info->index);
-
+	node = colo_node_get(info->index);
 	if (node == NULL) {
-		pr_dbg("can not find colo node whose index is %d\n", info->index);
+		pr_dbg("can not find colo node whose pid is %d\n", info->index);
 		return -EINVAL;
 	}
 
 	colo = &node->u.p;
 
-	if (colo->task)
+	if (colo->task) {
+		pr_dbg("node %d already been initialized\n", info->index);
 		/* already initialized by other rules */
 		goto out;
-
+	}
 
 	colo->task = kthread_run(kcolo_thread, colo, "kcolo%u", info->index);
 	if (IS_ERR(colo->task)) {
 		pr_dbg("colo_tg: fail to create kcolo thread\n");
 		ret = PTR_ERR(colo->task);
+		colo_node_put(node);
 		goto err;
 	}
 
@@ -1522,14 +1433,17 @@ static int colo_primary_tg_check(const struct xt_tgchk_param *par)
 
 	__module_get(THIS_MODULE);
 	/* init primary info */
-	node->func = colo_primary_receive;
-	node->notify = colo_primary_destroy;
+
+	spin_lock_bh(&node->lock);
+	node->destroy_notify_cb = colo_primary_destroy;
+	node->do_checkpoint_cb = primary_do_checkpoint;
+	spin_unlock_bh(&node->lock);
 out:
 	info->colo = colo;
+	colo_node_put(node);
 	return 0;
-
 err:
-	colo_node_unregister(node);
+	colo_node_destroy(node);
 	return ret;
 }
 
@@ -1539,8 +1453,7 @@ static void colo_primary_tg_destroy(const struct xt_tgdtor_param *par)
 	struct colo_node *node;
 
 	node = container_of(info->colo, struct colo_node, u.p);
-
-	colo_node_unregister(node);
+	colo_node_destroy(node);
 }
 
 static unsigned int

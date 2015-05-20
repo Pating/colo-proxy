@@ -8,10 +8,13 @@ nf_conntrack_colo:
    confirmed already, so we should add target on the --physdev-out
    too.
 
-2, use the nfnetlink interface, get rid of colo netlink.
+2, use the nfnetlink interface, get rid of colo netlink. (Done)
 
 3, id order to remove the limitation of netlink portid. use
    idmap to replace the colo_nodes array.
+
+4, rename 'index' member of xt_colo_primary_info and xt_colo_secondary_info to 'vm_pid', which
+should also change iptables code.
 
 PMYCOLO:
 1, do not use nfqueue to queue packets of master guest, this will

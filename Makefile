@@ -1,4 +1,4 @@
-obj-m := xt_PMYCOLO.o xt_SECCOLO.o nf_conntrack_colo.o
+obj-m := xt_PMYCOLO.o xt_SECCOLO.o nf_conntrack_colo.o nfnetlink_colo.o
 
 KERNELBUILD := /lib/modules/`uname -r`/build
 INSTALL_DIR := /lib/modules/`uname -r`/kernel/update
