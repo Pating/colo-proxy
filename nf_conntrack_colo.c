@@ -298,7 +298,7 @@ static int colo_init_proxy(struct sock *sk, int index)
 
 	node->index = index;
 	node->refcnt = 1;
-	INIT_LIST_HEAD(&node->list);
+	INIT_LIST_HEAD(&node->conn_list);
 	INIT_LIST_HEAD(&node->wait_list);
 	spin_lock_init(&node->lock);
 	RCU_INIT_POINTER(node->func, NULL);

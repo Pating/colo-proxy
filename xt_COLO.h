@@ -63,7 +63,7 @@ struct colo_secondary {
 };
 
 struct colo_node {
-	struct list_head	list;
+	struct list_head	conn_list;
 	struct list_head	wait_list;
 	spinlock_t		lock;
 	int			(*func)(void *node,

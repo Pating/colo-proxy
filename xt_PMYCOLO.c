@@ -613,8 +613,8 @@ static int kcolo_thread(void *dummy)
 		DECLARE_WAITQUEUE(wait, current);
 
 		spin_lock_bh(&node->lock);
-		if(!list_empty(&node->list))
-			conn = list_first_entry(&node->list, struct nf_conn_colo, conn_list);
+		if(!list_empty(&node->conn_list))
+			conn = list_first_entry(&node->conn_list, struct nf_conn_colo, conn_list);
 
 		if (!conn || colo->checkpoint) {
 			add_wait_queue(&colo->wait, &wait);
@@ -871,7 +871,7 @@ static int colo_enqueue_packet(struct nf_queue_entry *entry, unsigned int ptr)
 	}
 
 	spin_lock_bh(&node->lock);
-	list_move_tail(&conn->conn_list, &node->list);
+	list_move_tail(&conn->conn_list, &node->conn_list);
 	wake_up_interruptible(&node->u.p.wait);
 	spin_unlock_bh(&node->lock);
 
@@ -1176,7 +1176,7 @@ colo_slaver_queue_hook(const struct nf_hook_ops *ops, struct sk_buff *skb,
 		goto out;
 
 	spin_lock_bh(&node->lock);
-	list_move_tail(&conn->conn_list, &node->list);
+	list_move_tail(&conn->conn_list, &node->conn_list);
 	wake_up_interruptible(&node->u.p.wait);
 	spin_unlock_bh(&node->lock);
 out:
@@ -1292,11 +1292,11 @@ static void colo_do_checkpoint(struct colo_node *node)
 
 	colo->checkpoint = true;
 	spin_lock_bh(&node->lock);
-	list_splice_init(&node->wait_list, &node->list);
+	list_splice_init(&node->wait_list, &node->conn_list);
 
 next:
-	if (!list_empty(&node->list)) {
-		conn = list_first_entry(&node->list,
+	if (!list_empty(&node->conn_list)) {
+		conn = list_first_entry(&node->conn_list,
 					struct nf_conn_colo,
 					conn_list);
 
@@ -1457,10 +1457,10 @@ static void colo_primary_destroy_node(struct colo_node *node)
 next:
 	spin_lock_bh(&node->lock);
 
-	list_splice_init(&node->wait_list, &node->list);
+	list_splice_init(&node->wait_list, &node->conn_list);
 
-	if (!list_empty(&node->list)) {
-		conn = list_first_entry(&node->list,
+	if (!list_empty(&node->conn_list)) {
+		conn = list_first_entry(&node->conn_list,
 					struct nf_conn_colo,
 					conn_list);
 

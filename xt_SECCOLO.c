@@ -152,8 +152,8 @@ static void colo_sec_do_checkpoint(struct colo_node *node)
 
 	spin_lock_bh(&node->lock);
 next:
-	if (!list_empty(&node->list))
-		conn = list_first_entry(&node->list, struct nf_conn_colo, conn_list);
+	if (!list_empty(&node->conn_list))
+		conn = list_first_entry(&node->conn_list, struct nf_conn_colo, conn_list);
 	else
 		goto out;
 
@@ -202,7 +202,7 @@ static void colo_secondary_destroy(void *_node)
 	node->notify = NULL;
 
 	spin_lock_bh(&node->lock);
-	list_for_each_entry_safe(colo_conn, next, &node->list, conn_list) {
+	list_for_each_entry_safe(colo_conn, next, &node->conn_list, conn_list) {
 		list_del_init(&colo_conn->conn_list);
 		colo_conn->flags |= COLO_CONN_BYPASS;
 	}
@@ -277,7 +277,7 @@ colo_secondary_tg(struct sk_buff *skb, const struct xt_action_param *par)
 	/* Add ct into colo_secondary list */
 	spin_lock_bh(&node->lock);
 	if (list_empty(&conn->conn_list)) {
-		list_add_tail(&conn->conn_list, &node->list);
+		list_add_tail(&conn->conn_list, &node->conn_list);
 
 		if ((nf_ct_protonum(ct) == IPPROTO_TCP) &&
 		    (CTINFO2DIR(ctinfo) == IP_CT_DIR_ORIGINAL)) {
