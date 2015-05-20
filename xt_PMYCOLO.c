@@ -1359,7 +1359,6 @@ static void colo_primary_destroy_node(struct colo_node *node)
 
 	spin_lock_bh(&node->lock);
 	node->destroy_notify_cb = NULL;
-
 	task = node->u.p.task;
 	if (task)
 		node->u.p.task = NULL;
@@ -1383,7 +1382,6 @@ next:
 	} else {
 		spin_unlock_bh(&node->lock);
 		module_put(THIS_MODULE);
-		colo_node_destroy(node);
 		return;
 	}
 
@@ -1440,10 +1438,8 @@ static int colo_primary_tg_check(const struct xt_tgchk_param *par)
 	spin_unlock_bh(&node->lock);
 out:
 	info->colo = colo;
-	colo_node_put(node);
-	return 0;
 err:
-	colo_node_destroy(node);
+	colo_node_put(node);
 	return ret;
 }
 
@@ -1453,7 +1449,6 @@ static void colo_primary_tg_destroy(const struct xt_tgdtor_param *par)
 	struct colo_node *node;
 
 	node = container_of(info->colo, struct colo_node, u.p);
-	colo_node_destroy(node);
 }
 
 static unsigned int

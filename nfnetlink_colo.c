@@ -62,6 +62,7 @@ static void colo_node_release(struct kref *kref)
 	list_del_rcu (&node->list);
 	synchronize_rcu();
 	kfree (node);
+	node = NULL;
 }
 
 void colo_node_put(struct colo_node *node)

@@ -185,7 +185,6 @@ static void colo_secondary_destroy(struct colo_node *node)
 	spin_unlock_bh(&node->lock);
 	module_put(THIS_MODULE);
 
-	colo_node_destroy(node);
 }
 
 static int colo_secondary_tg_check(const struct xt_tgchk_param *par)
@@ -222,12 +221,7 @@ out:
 
 static void colo_secondary_tg_destroy(const struct xt_tgdtor_param *par)
 {
-	struct xt_colo_secondary_info *info = par->targinfo;
-	struct colo_node *node;
-
-	node = container_of(info->colo, struct colo_node, u.s);
-
-	colo_node_destroy(node);
+	/* Do something ? */
 }
 
 static unsigned int
