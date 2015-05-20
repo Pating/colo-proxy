@@ -110,8 +110,8 @@ static void nfct_init_colo(struct nf_conn_colo *conn,
 			proto->p.mack = proto->p.sack = max_ack;
 			proto->p.sort = false;
 			proto->p.mscale = proto->p.sscale = 1;
-			pr_dbg("nfct_init_colo compared_seq %u, mrnxt %u, srnxt %u, mack %u, sack %u\n",
-				proto->p.compared_seq, proto->p.mrcv_nxt,
+			pr_dbg("conn %p nfct_init_colo compared_seq %u, mrnxt %u, srnxt %u, mack %u, sack %u\n",
+				conn, proto->p.compared_seq, proto->p.mrcv_nxt,
 				proto->p.srcv_nxt, proto->p.mack, proto->p.sack);
 		} else {
 			proto->s.sec_isn = proto->s.pri_isn = 0;
@@ -135,7 +135,7 @@ struct nf_conn_colo *nfct_create_colo(struct nf_conn *ct, u32 index, u32 flag)
 	size_t length = 0;
 
 	if (nf_ct_is_confirmed(ct)) {
-		pr_dbg("fuck confirmed!\n");
+		pr_dbg("conntrack %p is confirmed!\n", ct);
 		//return NULL;
 	}
 
@@ -145,7 +145,7 @@ struct nf_conn_colo *nfct_create_colo(struct nf_conn *ct, u32 index, u32 flag)
 		if (flag & COLO_CONN_SECONDARY) {
 			/* seq adjust is only meaningful for TCP conn */
 			if (!nfct_seqadj_ext_add(ct)) {
-				pr_dbg("fuck failed to add SEQADJ extension\n");
+				pr_dbg("failed to add SEQADJ extension\n");
 			}
 		}
 	}
@@ -153,7 +153,7 @@ struct nf_conn_colo *nfct_create_colo(struct nf_conn *ct, u32 index, u32 flag)
 	conn = (struct nf_conn_colo *) nf_ct_ext_add_length(ct, NF_CT_EXT_COLO,
 							    length, GFP_ATOMIC);
 	if (!conn) {
-		pr_dbg("fuck! add extend failed\n");
+		pr_dbg("add extend failed\n");
 		return NULL;
 	}
 
@@ -179,12 +179,12 @@ nf_ct_colo_get(struct sk_buff *skb, struct colo_node *node, u32 flag)
 	if (colo_conn == NULL) {
 		colo_conn = nfct_create_colo(ct, node->index, flag);
 		if (colo_conn == NULL) {
-			pr_dbg("fuck! create failed!\n");
+			pr_dbg("create colo conn failed!\n");
 			return NULL;
 		}
 
 		nfct_init_colo(colo_conn, node->index, flag);
-		pr_dbg("colo_tg: create colo_conn %p for conn %p\n",
+		pr_dbg("colo_tg: create conn %p for contrack %p\n",
 		       colo_conn, ct);
 	}
 

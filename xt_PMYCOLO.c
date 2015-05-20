@@ -650,7 +650,7 @@ static int kcolo_thread(void *dummy)
 		nf_conntrack_put(conn->nfct);
 	}
 
-	pr_dbg("FUCKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKKK EXIT\n");
+	pr_dbg("colo thread exit\n");
 	return 0;
 }
 
@@ -714,8 +714,8 @@ static int colo_enqueue_tcp_packet(struct nf_conn_colo *conn,
 	if (th == NULL)
 		return -1;
 
-	pr_dbg("DEBUG: master: enqueue skb seq %u, seq_end %u, ack %u, LEN: %u\n",
-		cb->seq, cb->seq_end, cb->ack, cb->seq_end - cb->seq);
+	pr_dbg("DEBUG: master: conn %p enqueue skb seq %u, seq_end %u, ack %u, LEN: %u\n",
+		conn, cb->seq, cb->seq_end, cb->ack, cb->seq_end - cb->seq);
 
 	/* Reopen? */
 	if ((proto->p.mrcv_nxt == 0) || (th->syn && cb->seq_end != proto->p.mrcv_nxt)) {
@@ -724,7 +724,7 @@ static int colo_enqueue_tcp_packet(struct nf_conn_colo *conn,
 		proto->p.srcv_nxt = proto->p.mrcv_nxt = cb->seq_end;
 		proto->p.sack = proto->p.mack = cb->ack;
 		proto->p.compared_seq = cb->seq;
-		pr_dbg("syn %d, seq_end %u, rcv_nxt is %u\n",
+		pr_dbg("master syn %d, seq_end %u, rcv_nxt is %u\n",
 			th->syn, cb->seq_end, proto->p.mrcv_nxt);
 		if (!reopen && th->syn && (conn->flags & COLO_CONN_SYN_RECVD)) {
 			nf_reinject(entry, NF_STOP);
@@ -815,7 +815,7 @@ static int colo_enqueue_packet(struct nf_queue_entry *entry, unsigned int ptr)
 	conn = nfct_colo(ct);
 
 	if (conn == NULL) {
-		pr_dbg("fuck colo_enqueue_packet colo isn't exist\n");
+		pr_dbg("colo_enqueue_packet colo isn't exist\n");
 		return -1;
 	}
 
@@ -824,7 +824,7 @@ static int colo_enqueue_packet(struct nf_queue_entry *entry, unsigned int ptr)
 	}
 
 	if (entry->hook != NF_INET_PRE_ROUTING) {
-		pr_dbg("fuck packet is not on pre routing chain\n");
+		pr_dbg("packet is not on pre routing chain\n");
 		return -1;
 	}
 
@@ -940,12 +940,12 @@ colo_slaver_enqueue_tcp_packet(struct nf_conn_colo *conn,
 			     skb, cb, &proto->p.sscale);
 
 	if (th == NULL) {
-		pr_dbg("fuck! get tcphdr of slaver packet failed\n");
+		pr_dbg("get tcphdr of slaver packet failed\n");
 		return NF_DROP;
 	}
 
-	pr_dbg("DEBUG: slaver: enqueue skb seq %u, seq_end %u, ack %u, sack %u, LEN: %u\n",
-		cb->seq, cb->seq_end, cb->ack, proto->p.sack, cb->seq_end - cb->seq);
+	pr_dbg("DEBUG: slaver: conn %p enqueue skb seq %u, seq_end %u, ack %u, sack %u, LEN: %u\n",
+		conn, cb->seq, cb->seq_end, cb->ack, proto->p.sack, cb->seq_end - cb->seq);
 
 	if (before(proto->p.sack, cb->ack)) {
 		proto->p.sack = cb->ack;
@@ -1158,7 +1158,7 @@ colo_slaver_queue_hook(const struct nf_hook_ops *ops, struct sk_buff *skb,
 	conn = nfct_colo(ct);
 	if (conn == NULL) {
 		/* this is rare, since conntrack is created when client's first packet coming */
-		pr_dbg("fuck! no colo conn\n");
+		pr_dbg("no colo conn\n");
 		goto out;
 	}
 

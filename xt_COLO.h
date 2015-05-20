@@ -226,7 +226,7 @@ struct tcphdr *colo_get_tcphdr(u_int8_t pf, struct sk_buff *skb,
 
 	l3proto = __nf_ct_l3proto_find(pf);
 	if(!l3proto->get_l4proto(skb, nhoff, &dataoff, &protonum)) {
-		pr_dbg("fuck get iphdr failed\n");
+		pr_dbg("get iphdr failed\n");
 		return NULL;
 	}
 
@@ -237,7 +237,7 @@ struct tcphdr *colo_get_tcphdr(u_int8_t pf, struct sk_buff *skb,
 
 	th = skb_header_pointer(skb, dataoff, sizeof(_tcph), &_tcph);
 	if (th == NULL) {
-		pr_dbg("fuck get tcphdr failed\n");
+		pr_dbg("get tcphdr failed\n");
 		return NULL;
 	}
 
@@ -283,7 +283,7 @@ static inline struct udphdr *colo_get_udphdr(u_int8_t pf, struct sk_buff *skb,
 
 	l3proto = __nf_ct_l3proto_find(pf);
 	if(!l3proto->get_l4proto(skb, nhoff, &dataoff, &protonum)) {
-		pr_dbg("fuck get iphdr failed\n");
+		pr_dbg("get iphdr failed\n");
 		return NULL;
 	}
 
@@ -294,18 +294,18 @@ static inline struct udphdr *colo_get_udphdr(u_int8_t pf, struct sk_buff *skb,
 
 	uh = skb_header_pointer(skb, dataoff, sizeof(_udph), &_udph);
 	if (uh == NULL) {
-		pr_dbg("fuck get udphdr failed\n");
+		pr_dbg("get udphdr failed\n");
 		return NULL;
 	}
 
 	udplen = ntohs(uh->len);
 	if (udplen < sizeof(_udph)) {
-		pr_dbg("fuck udplen %u, udphdr len %lu\n", udplen, sizeof(_udph));
+		pr_dbg("udplen %u, udphdr len %lu\n", udplen, sizeof(_udph));
 		return NULL;
 	}
 
 	if (skb->len != (dataoff + udplen)) {
-		pr_dbg("fuck skblen %u, network len %u, udp len %u\n", skb->len, dataoff, udplen);
+		pr_dbg("skblen %u, network len %u, udp len %u\n", skb->len, dataoff, udplen);
 		return NULL;
 	}
 
