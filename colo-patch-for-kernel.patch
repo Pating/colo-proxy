@@ -76,6 +76,7 @@ index 0000000..8b510ab
 +struct xt_colo_primary_info {
 +	u32	index; /* equal to PID of the sending VM process. */
 +
++	char		forward_dev[256];
 +	/* for kernel module internal use only */
 +	struct colo_primary *colo __attribute__((aligned(8)));
 +};
