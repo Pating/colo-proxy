@@ -1,24 +1,24 @@
-From 8efcddaf13a2ac4b72ca8989a19a7e76adb18c86 Mon Sep 17 00:00:00 2001
-From: Gao feng <gaofeng@cn.fujitsu.com>
-Date: Thu, 17 Jul 2014 15:21:09 +0800
-Subject: [PATCH] add COLO library for iptables
+From ec185f8c66af76db3b33def47e2e4da6f59d818c Mon Sep 17 00:00:00 2001
+From: zhanghailiang <zhang.zhanghailiang@huawei.com>
+Date: Tue, 19 May 2015 10:11:05 +0000
+Subject: [PATCH] iptables: Add support for COLO
 
-Signed-off-by: Gao feng <gaofeng@cn.fujitsu.com>
+Signed-off-by: zhanghailiang <zhang.zhanghailiang@huawei.com>
 ---
- extensions/libxt_PMYCOLO.c        | 76 +++++++++++++++++++++++++++++++++++++++
- extensions/libxt_SECCOLO.c        | 71 ++++++++++++++++++++++++++++++++++++
- include/linux/netfilter/xt_COLO.h | 19 ++++++++++
- 3 files changed, 166 insertions(+)
+ extensions/libxt_PMYCOLO.c        | 91 +++++++++++++++++++++++++++++++++++++++
+ extensions/libxt_SECCOLO.c        | 71 ++++++++++++++++++++++++++++++
+ include/linux/netfilter/xt_COLO.h | 20 +++++++++
+ 3 files changed, 182 insertions(+)
  create mode 100644 extensions/libxt_PMYCOLO.c
  create mode 100644 extensions/libxt_SECCOLO.c
  create mode 100644 include/linux/netfilter/xt_COLO.h
 
 diff --git a/extensions/libxt_PMYCOLO.c b/extensions/libxt_PMYCOLO.c
 new file mode 100644
-index 0000000..3ea1570
+index 0000000..c075b18
 --- /dev/null
 +++ b/extensions/libxt_PMYCOLO.c
-@@ -0,0 +1,76 @@
+@@ -0,0 +1,91 @@
 +/* Shared library add-on to iptables to add TRACE target support. */
 +#include <stdio.h>
 +#include <string.h>
@@ -35,9 +35,21 @@ index 0000000..3ea1570
 +	{.name = "index", .id = 0, .type = XTTYPE_UINT32,
 +	 .flags = XTOPT_PUT, XTOPT_POINTER(s, index),
 +	 .excl = 1},
++	{.name = "forward-dev", .id = 1, .type = XTTYPE_STRING,
++	 .flags = XTOPT_PUT, XTOPT_POINTER(s, forward_dev)},
 +	XTOPT_TABLEEND,
 +};
 +#undef s
++
++static void PMYCOLO_help(void)
++{
++	printf(
++"PMYCOLO target options:\n"
++" --index index\n"
++"				for each vm instance, equals to PID of VM.\n"
++" --forward-dev nic\n"
++"				nic of copy packet to\n");
++}
 +
 +
 +static void colo_parse(struct xt_option_call *cb)
@@ -58,6 +70,7 @@ index 0000000..3ea1570
 +	printf("PMYCOLO");
 +
 +	printf("index %d", einfo->index);
++	printf("forward-dev %s", einfo->forward_dev);
 +}
 +
 +static void colo_save(const void *ip, const struct xt_entry_target *target)
@@ -66,6 +79,7 @@ index 0000000..3ea1570
 +		(const struct xt_colo_primary_info *)target->data;
 +
 +	printf("--index %d", einfo->index);
++	printf("--forward-dev %s", einfo->forward_dev);
 +}
 +/*
 +static void colo_primary_init(struct xt_entry_target *target)
@@ -87,6 +101,7 @@ index 0000000..3ea1570
 +	.print		= colo_print,
 +	.x6_parse	= colo_parse,
 +	.x6_options	= colo_opts,
++	.help		= PMYCOLO_help,
 +	//.init		= colo_primary_init,
 +};
 +
@@ -174,10 +189,10 @@ index 0000000..de01323
 +}
 diff --git a/include/linux/netfilter/xt_COLO.h b/include/linux/netfilter/xt_COLO.h
 new file mode 100644
-index 0000000..45431ef
+index 0000000..486e011
 --- /dev/null
 +++ b/include/linux/netfilter/xt_COLO.h
-@@ -0,0 +1,19 @@
+@@ -0,0 +1,20 @@
 +#ifndef _XT_COLO_TARGET_H
 +#define _XT_COLO_TARGET_H
 +
@@ -185,7 +200,7 @@ index 0000000..45431ef
 +
 +struct xt_colo_primary_info {
 +	__u32			index;
-+
++	char forward_dev[256];
 +	/* for kernel module internal use only */
 +	struct colo_primary *colo __attribute__((aligned(8)));
 +};
@@ -198,5 +213,5 @@ index 0000000..45431ef
 +};
 +#endif
 -- 
-2.1.0
+1.7.12.4
 
