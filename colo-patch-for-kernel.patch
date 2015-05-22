@@ -46,7 +46,7 @@ index 319f471..6e44fbd 100644
 +	IPS_COLO_TEMPLATE = (1 << IPS_COLO_TEMPLATE_BIT),
  };
  
-/* Connection tracking event types */
+ /* Connection tracking event types */
 diff --git a/include/uapi/linux/netfilter/nfnetlink.h b/include/uapi/linux/netfilter/nfnetlink.h
 index 354a7e5..1acfc0c 100644
 --- a/include/uapi/linux/netfilter/nfnetlink.h
