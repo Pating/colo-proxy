@@ -4,6 +4,7 @@
  * Copyright (c) 2014, 2015 Intel Corporation.
  *
  * Authors:
+ *  Zhang Hailiang <zhang.zhanghailiang@huawei.com>
  *  Gao feng <gaofeng@cn.fujitsu.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -15,6 +16,11 @@
 #define _XT_COLO_H
 
 #include <net/netfilter/nf_conntrack_seqadj.h>
+#include <linux/kref.h>
+#include <net/tcp.h>
+#include <net/netfilter/nf_conntrack_l3proto.h>
+
+#define DEBUG
 
 #ifdef DEBUG
 #define pr_dbg(fmt, ...) printk(pr_fmt(fmt), ##__VA_ARGS__)
@@ -27,22 +33,6 @@
 
 #define COLO_SLAVER_PACKET_MARK	0x1117
 #define NF_CT_COLO_ZONE  0x1987
-
-#define NETLINK_COLO 28
-
-enum colo_netlink_status {
-	COLO_QUERY_CHECKPOINT = (NLMSG_MIN_TYPE + 1),
-	COLO_CHECKPOINT,
-	COLO_FAILOVER,
-	COLO_PROXY_INIT,
-	COLO_PROXY_RESET,
-};
-
-struct nf_conn_colo;
-
-struct colomsg {
-	bool	checkpoint;
-};
 
 enum colo_conn_flags {
 	COLO_CONN_BYPASS	= 0x1,
@@ -62,23 +52,26 @@ struct colo_secondary {
 	bool			failover;
 };
 
+ /* Each VM has a colo_node struct */
 struct colo_node {
-	struct list_head	list;
+        struct list_head     list; /* point to next colo node */
+        pid_t                      vm_pid; /* Help to find the this node */
+        int   mode; /* in master side or slave side */
+
+        struct net *net;
+
+	struct list_head	conn_list;
 	struct list_head	wait_list;
 	spinlock_t		lock;
-	int			(*func)(void *node,
-					struct sk_buff *skb,
-					struct nlmsghdr *nlh);
-	void			(*notify)(void *node);
-	u32			index;
-	u32			refcnt;
+	int	(*do_checkpoint_cb)(struct colo_node *node);
+	void	(*destroy_notify_cb)(struct colo_node *node);
 	union {
 		struct colo_primary p;
 		struct colo_secondary s;
 	} u;
-};
 
-#define COLO_NODES_NUM	10
+	struct kref   	refcnt; /* Protect colo_node struct */
+};
 
 /* MUST small than 48 - sizeof (struct inet_skb_parm) */
 struct colo_tcp_cb {
@@ -226,7 +219,7 @@ struct tcphdr *colo_get_tcphdr(u_int8_t pf, struct sk_buff *skb,
 
 	l3proto = __nf_ct_l3proto_find(pf);
 	if(!l3proto->get_l4proto(skb, nhoff, &dataoff, &protonum)) {
-		pr_dbg("fuck get iphdr failed\n");
+		pr_dbg("get iphdr failed\n");
 		return NULL;
 	}
 
@@ -237,7 +230,7 @@ struct tcphdr *colo_get_tcphdr(u_int8_t pf, struct sk_buff *skb,
 
 	th = skb_header_pointer(skb, dataoff, sizeof(_tcph), &_tcph);
 	if (th == NULL) {
-		pr_dbg("fuck get tcphdr failed\n");
+		pr_dbg("get tcphdr failed\n");
 		return NULL;
 	}
 
@@ -283,7 +276,7 @@ static inline struct udphdr *colo_get_udphdr(u_int8_t pf, struct sk_buff *skb,
 
 	l3proto = __nf_ct_l3proto_find(pf);
 	if(!l3proto->get_l4proto(skb, nhoff, &dataoff, &protonum)) {
-		pr_dbg("fuck get iphdr failed\n");
+		pr_dbg("get iphdr failed\n");
 		return NULL;
 	}
 
@@ -294,18 +287,18 @@ static inline struct udphdr *colo_get_udphdr(u_int8_t pf, struct sk_buff *skb,
 
 	uh = skb_header_pointer(skb, dataoff, sizeof(_udph), &_udph);
 	if (uh == NULL) {
-		pr_dbg("fuck get udphdr failed\n");
+		pr_dbg("get udphdr failed\n");
 		return NULL;
 	}
 
 	udplen = ntohs(uh->len);
 	if (udplen < sizeof(_udph)) {
-		pr_dbg("fuck udplen %u, udphdr len %lu\n", udplen, sizeof(_udph));
+		pr_dbg("udplen %u, udphdr len %lu\n", udplen, sizeof(_udph));
 		return NULL;
 	}
 
 	if (skb->len != (dataoff + udplen)) {
-		pr_dbg("fuck skblen %u, network len %u, udp len %u\n", skb->len, dataoff, udplen);
+		pr_dbg("skblen %u, network len %u, udp len %u\n", skb->len, dataoff, udplen);
 		return NULL;
 	}
 
