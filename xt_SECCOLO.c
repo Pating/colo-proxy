@@ -6,6 +6,7 @@
  * Copyright (c) 2014, 2015 Intel Corporation.
  *
  * Authors:
+ *  Zhang Hailiang <zhang.zhanghailiang@huawei.com>
  *  Gao feng <gaofeng@cn.fujitsu.com>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -19,6 +20,7 @@
 #include <net/tcp.h>
 #include "xt_COLO.h"
 #include "nf_conntrack_colo.h"
+#include "nfnetlink_colo.h"
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Gao feng <gaofeng@cn.fujitsu.com>");
@@ -139,12 +141,7 @@ static void colo_tcp_chk_finish(struct nf_conn_colo *conn)
 	clear_bit(IPS_SEQ_ADJUST_BIT, &ct->status);
 }
 
-static void colo_sec_do_failover(struct colo_node *node)
-{
-	node->u.s.failover = true;
-}
-
-static void colo_sec_do_checkpoint(struct colo_node *node)
+static int secondary_do_checkpoint(struct colo_node *node)
 {
 	struct nf_conn_colo *conn;
 
@@ -152,8 +149,8 @@ static void colo_sec_do_checkpoint(struct colo_node *node)
 
 	spin_lock_bh(&node->lock);
 next:
-	if (!list_empty(&node->list))
-		conn = list_first_entry(&node->list, struct nf_conn_colo, conn_list);
+	if (!list_empty(&node->conn_list))
+		conn = list_first_entry(&node->conn_list, struct nf_conn_colo, conn_list);
 	else
 		goto out;
 
@@ -170,46 +167,24 @@ next:
 
 	goto next;
 out:
-	spin_unlock_bh(&node->lock);
-}
-
-static int colo_secondary_receive(void *node,
-				  struct sk_buff *skb,
-				  struct nlmsghdr *nlh)
-{
-	switch (nlh->nlmsg_type) {
-		/* Start failover */
-		case COLO_FAILOVER:
-			colo_sec_do_failover(node);
-			break;
-		/* guest stopped, do checkpoint */
-		case COLO_CHECKPOINT:
-			colo_sec_do_checkpoint(node);
-			return 0;
-		default:
-			break;
-	}
-
+	spin_unlock_bh (&node->lock);
 	return 0;
 }
 
-static void colo_secondary_destroy(void *_node)
+static void colo_secondary_destroy(struct colo_node *node)
 {
-	struct colo_node *node = (struct colo_node *) _node;
 	struct nf_conn_colo *colo_conn, *next;
 
-	node->func = NULL;
-	node->notify = NULL;
+	node->destroy_notify_cb = NULL;
 
 	spin_lock_bh(&node->lock);
-	list_for_each_entry_safe(colo_conn, next, &node->list, conn_list) {
+	list_for_each_entry_safe(colo_conn, next, &node->conn_list, conn_list) {
 		list_del_init(&colo_conn->conn_list);
 		colo_conn->flags |= COLO_CONN_BYPASS;
 	}
 	spin_unlock_bh(&node->lock);
-
-	colo_node_unregister(node);
 	module_put(THIS_MODULE);
+
 }
 
 static int colo_secondary_tg_check(const struct xt_tgchk_param *par)
@@ -218,39 +193,35 @@ static int colo_secondary_tg_check(const struct xt_tgchk_param *par)
 	struct colo_secondary *colo;
 	struct colo_node *node;
 
-	if (info->index >= COLO_NODES_NUM)
-		return -EINVAL;
-
-	node = colo_node_find_get(info->index);
+	node = colo_node_get(info->index);
 	if (node == NULL) {
-		pr_dbg("cannot find colo node whose index is %d\n", info->index);
+		pr_dbg("Can not find colo node whose index is %d\n", info->index);
 		return -EINVAL;
 	}
 
 	colo = &node->u.s;
 
-	if (node->func)
+	spin_lock_bh(&node->lock);
+	if (node->destroy_notify_cb) {
+		spin_unlock_bh(&node->lock);
 		goto out;
+	}
 
+	node->destroy_notify_cb = colo_secondary_destroy;
+	node->do_checkpoint_cb = secondary_do_checkpoint;
+	spin_unlock_bh(&node->lock);
 	__module_get(THIS_MODULE);
-
-	node->func = colo_secondary_receive;
-	node->notify = colo_secondary_destroy;
 	colo->failover = false;
 
 out:
 	info->colo = colo;
+	colo_node_put(node);
 	return 0;
 }
 
 static void colo_secondary_tg_destroy(const struct xt_tgdtor_param *par)
 {
-	struct xt_colo_secondary_info *info = par->targinfo;
-	struct colo_node *node;
-
-	node = container_of(info->colo, struct colo_node, u.s);
-
-	colo_node_unregister(node);
+	/* Do something ? */
 }
 
 static unsigned int
@@ -277,7 +248,7 @@ colo_secondary_tg(struct sk_buff *skb, const struct xt_action_param *par)
 	/* Add ct into colo_secondary list */
 	spin_lock_bh(&node->lock);
 	if (list_empty(&conn->conn_list)) {
-		list_add_tail(&conn->conn_list, &node->list);
+		list_add_tail(&conn->conn_list, &node->conn_list);
 
 		if ((nf_ct_protonum(ct) == IPPROTO_TCP) &&
 		    (CTINFO2DIR(ctinfo) == IP_CT_DIR_ORIGINAL)) {

@@ -3,12 +3,13 @@ From: Gao feng <gaofeng@cn.fujitsu.com>
 Date: Tue, 27 Jan 2015 17:33:09 +0800
 Subject: [PATCH] colo patch for kernel
 
-Signed-off-by: Gao feng <gaofeng@cn.fujitsu.com>
+Signed-off-by: zhanghailiang <zhang.zhanghailiang@huawei.com>
 ---
  include/net/netfilter/nf_conntrack_extend.h        |  2 ++
  include/uapi/linux/netfilter/nf_conntrack_common.h |  4 ++++
+ include/uapi/linux/netfilter/nfnetlink.h           |  3 ++-
  include/uapi/linux/netfilter/xt_COLO.h             | 19 +++++++++++++++++++
- 3 files changed, 25 insertions(+)
+ 4 files changed, 27 insertions(+), 1 deletion(-)
  create mode 100644 include/uapi/linux/netfilter/xt_COLO.h
 
 diff --git a/include/net/netfilter/nf_conntrack_extend.h b/include/net/netfilter/nf_conntrack_extend.h
@@ -46,6 +47,21 @@ index 319f471..6e44fbd 100644
  };
  
  /* Connection tracking event types */
+diff --git a/include/uapi/linux/netfilter/nfnetlink.h b/include/uapi/linux/netfilter/nfnetlink.h
+index 354a7e5..1acfc0c 100644
+--- a/include/uapi/linux/netfilter/nfnetlink.h
++++ b/include/uapi/linux/netfilter/nfnetlink.h
+@@ -57,7 +57,8 @@ struct nfgenmsg {
+ #define NFNL_SUBSYS_CTHELPER		9
+ #define NFNL_SUBSYS_NFTABLES		10
+ #define NFNL_SUBSYS_NFT_COMPAT		11
+-#define NFNL_SUBSYS_COUNT		12
++#define NFNL_SUBSYS_COLO		12
++#define NFNL_SUBSYS_COUNT		13
+ 
+ /* Reserved control nfnetlink messages */
+ #define NFNL_MSG_BATCH_BEGIN		NLMSG_MIN_TYPE
+
 diff --git a/include/uapi/linux/netfilter/xt_COLO.h b/include/uapi/linux/netfilter/xt_COLO.h
 new file mode 100644
 index 0000000..8b510ab
@@ -58,14 +74,15 @@ index 0000000..8b510ab
 +#include <linux/types.h>
 +
 +struct xt_colo_primary_info {
-+	u32		index;
++	u32	index; /* equal to PID of the sending VM process. */
 +
++	char		forward_dev[256];
 +	/* for kernel module internal use only */
 +	struct colo_primary *colo __attribute__((aligned(8)));
 +};
 +
 +struct xt_colo_secondary_info {
-+	u32		index;
++	u32	index;  /* equal to PID of the sending VM process. */
 +
 +	/* for kernel module internal use only */
 +	struct colo_secondary   *colo __attribute__((aligned(8)));
