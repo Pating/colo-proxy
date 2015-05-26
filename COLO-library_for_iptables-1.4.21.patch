@@ -1,24 +1,24 @@
-From ec185f8c66af76db3b33def47e2e4da6f59d818c Mon Sep 17 00:00:00 2001
-From: zhanghailiang <zhang.zhanghailiang@huawei.com>
-Date: Tue, 19 May 2015 10:11:05 +0000
+From d2b81b1ebbfe4af442efe3b3d535d6945bcc42c6 Mon Sep 17 00:00:00 2001
+From: Li Zhijian <lizhijian@cn.fujitsu.com>
+Date: Tue, 26 May 2015 01:29:16 -0400
 Subject: [PATCH] iptables: Add support for COLO
 
-Signed-off-by: zhanghailiang <zhang.zhanghailiang@huawei.com>
+Signed-off-by: Li Zhijian <lizhijian@cn.fujitsu.com>
 ---
- extensions/libxt_PMYCOLO.c        | 91 +++++++++++++++++++++++++++++++++++++++
- extensions/libxt_SECCOLO.c        | 71 ++++++++++++++++++++++++++++++
- include/linux/netfilter/xt_COLO.h | 20 +++++++++
- 3 files changed, 182 insertions(+)
+ extensions/libxt_PMYCOLO.c        | 88 +++++++++++++++++++++++++++++++++++++++
+ extensions/libxt_SECCOLO.c        | 71 +++++++++++++++++++++++++++++++
+ include/linux/netfilter/xt_COLO.h | 19 +++++++++
+ 3 files changed, 178 insertions(+)
  create mode 100644 extensions/libxt_PMYCOLO.c
  create mode 100644 extensions/libxt_SECCOLO.c
  create mode 100644 include/linux/netfilter/xt_COLO.h
 
 diff --git a/extensions/libxt_PMYCOLO.c b/extensions/libxt_PMYCOLO.c
 new file mode 100644
-index 0000000..c075b18
+index 0000000..764e637
 --- /dev/null
 +++ b/extensions/libxt_PMYCOLO.c
-@@ -0,0 +1,91 @@
+@@ -0,0 +1,88 @@
 +/* Shared library add-on to iptables to add TRACE target support. */
 +#include <stdio.h>
 +#include <string.h>
@@ -54,10 +54,7 @@ index 0000000..c075b18
 +
 +static void colo_parse(struct xt_option_call *cb)
 +{
-+	struct xt_colo_primary_info *einfo = cb->data;
-+
 +	xtables_option_parse(cb);
-+	einfo->index = cb->val.u32;
 +}
 +
 +
@@ -189,10 +186,10 @@ index 0000000..de01323
 +}
 diff --git a/include/linux/netfilter/xt_COLO.h b/include/linux/netfilter/xt_COLO.h
 new file mode 100644
-index 0000000..486e011
+index 0000000..5d82893
 --- /dev/null
 +++ b/include/linux/netfilter/xt_COLO.h
-@@ -0,0 +1,20 @@
+@@ -0,0 +1,19 @@
 +#ifndef _XT_COLO_TARGET_H
 +#define _XT_COLO_TARGET_H
 +
@@ -213,5 +210,5 @@ index 0000000..486e011
 +};
 +#endif
 -- 
-1.7.12.4
+1.8.3.1
 
