@@ -8,7 +8,7 @@ Signed-off-by: zhanghailiang <zhang.zhanghailiang@huawei.com>
  include/net/netfilter/nf_conntrack_extend.h        |  2 ++
  include/uapi/linux/netfilter/nf_conntrack_common.h |  4 ++++
  include/uapi/linux/netfilter/nfnetlink.h           |  3 ++-
- include/uapi/linux/netfilter/xt_COLO.h             | 19 +++++++++++++++++++
+ include/uapi/linux/netfilter/xt_COLO.h             | 20 +++++++++++++++++++
  4 files changed, 27 insertions(+), 1 deletion(-)
  create mode 100644 include/uapi/linux/netfilter/xt_COLO.h
 
@@ -46,7 +46,7 @@ index 319f471..6e44fbd 100644
 +	IPS_COLO_TEMPLATE = (1 << IPS_COLO_TEMPLATE_BIT),
  };
  
-/* Connection tracking event types */
+ /* Connection tracking event types */
 diff --git a/include/uapi/linux/netfilter/nfnetlink.h b/include/uapi/linux/netfilter/nfnetlink.h
 index 354a7e5..1acfc0c 100644
 --- a/include/uapi/linux/netfilter/nfnetlink.h
@@ -67,7 +67,7 @@ new file mode 100644
 index 0000000..8b510ab
 --- /dev/null
 +++ b/include/uapi/linux/netfilter/xt_COLO.h
-@@ -0,0 +1,19 @@
+@@ -0,0 +1,20 @@
 +#ifndef _XT_COLO_TARGET_H
 +#define _XT_COLO_TARGET_H
 +
@@ -76,6 +76,7 @@ index 0000000..8b510ab
 +struct xt_colo_primary_info {
 +	u32	index; /* equal to PID of the sending VM process. */
 +
++	char		forward_dev[256];
 +	/* for kernel module internal use only */
 +	struct colo_primary *colo __attribute__((aligned(8)));
 +};
