@@ -1,13 +1,11 @@
 obj-m := xt_PMYCOLO.o xt_SECCOLO.o nf_conntrack_colo.o nfnetlink_colo.o
 
 KERNELBUILD := /lib/modules/`uname -r`/build
-INSTALL_DIR := /lib/modules/`uname -r`/kernel/update
 default:
 	make -C $(KERNELBUILD) M=$(shell pwd) modules
 
 install: default
-	mkdir -p $(INSTALL_DIR)
-	cp *.ko $(INSTALL_DIR)
+	INSTALL_MOD_DIR=update make -C $(KERNELBUILD) M=$(shell pwd) modules_install
 	depmod
     
 clean:
