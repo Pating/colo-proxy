@@ -1434,12 +1434,11 @@ static int setup_forward_netdev(const char *dev_name)
 	}
 
 	pr_dbg("Register %s as a forward device\n", dev_name);
-	fw_dev = kmalloc(sizeof(*fw_dev), GFP_ATOMIC);
+	fw_dev = kzalloc(sizeof(*fw_dev), GFP_ATOMIC);
 	if (!fw_dev) {
 		pr_dbg("Can not alloc memory for ptype\n");
 		return -ENOMEM;
 	}
-	memset(fw_dev, sizeof(*fw_dev), 0);
 
 	fw_dev->ptype.dev = dev_get_by_name(&init_net, dev_name);
 	if (fw_dev->ptype.dev == NULL) {
