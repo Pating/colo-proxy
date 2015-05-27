@@ -211,7 +211,9 @@ static struct nf_ct_ext_type nf_ct_colo_extend __read_mostly = {
 
 static int __init nf_conntrack_colo_init(void)
 {
-
+	
+	request_module("nf_conntrack_ipv4");
+	request_module("nf_conntrack_ipv6");
 	return nf_ct_extend_register(&nf_ct_colo_extend);
 }
 
