@@ -215,13 +215,16 @@ static int colo_secondary_tg_check(const struct xt_tgchk_param *par)
 
 out:
 	info->colo = colo;
-	colo_node_put(node);
 	return 0;
 }
 
 static void colo_secondary_tg_destroy(const struct xt_tgdtor_param *par)
 {
-	/* Do something ? */
+	struct xt_colo_secondary_info *info = par->targinfo;
+	struct colo_node *node;
+
+	node = container_of(info->colo, struct colo_node, u.s);
+	colo_node_put(node);
 }
 
 static unsigned int

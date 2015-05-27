@@ -59,6 +59,7 @@ static void colo_node_release(struct kref *kref)
 {
 	struct colo_node *node = container_of(kref, struct colo_node, refcnt);
 
+	pr_dbg("%s, destroy node:%d\n", __func__, node->vm_pid);
 	list_del_rcu (&node->list);
 	synchronize_rcu();
 	kfree (node);
