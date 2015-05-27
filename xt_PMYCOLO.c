@@ -1541,6 +1541,7 @@ static int colo_primary_tg_check(const struct xt_tgchk_param *par)
 	spin_unlock_bh(&node->lock);
 out:
 	info->colo = colo;
+	return 0;
 err:
 	colo_node_put(node);
 	return ret;
@@ -1553,6 +1554,7 @@ static void colo_primary_tg_destroy(const struct xt_tgdtor_param *par)
 
 	node = container_of(info->colo, struct colo_node, u.p);
 	cleanup_forward_netdev(info->forward_dev);
+	colo_node_put(node);
 }
 
 static unsigned int
