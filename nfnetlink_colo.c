@@ -55,15 +55,34 @@ struct colo_node *colo_node_get(u32 vm_pid)
 
 EXPORT_SYMBOL_GPL(colo_node_get);
 
+/* We are in workqueue, so it is safe to do work no matter leading sleep or not */
+static void colo_node_destroy_fn(struct work_struct *work)
+{
+	struct colo_node *node = container_of(work, struct colo_node, destroy_work);
+
+	pr_dbg("%s: destroy node:%d and kcolo:%d thread\n", __func__, node->vm_pid, node->vm_pid);
+	node->destroy_notify_cb(node);
+	kfree(node);
+}
+
+/* call_rcu callback function, it should never do work that leading to sleep. */
+static void
+colo_node_destroy_rcu(struct rcu_head *head)
+{
+	struct colo_node *node = container_of(head, struct colo_node, rcu);
+
+	INIT_WORK(&node->destroy_work, colo_node_destroy_fn);
+	schedule_work(&node->destroy_work);
+}
+
+/* In atomic_notifier callback, never do work that leading to sleep or schedule. */
 static void colo_node_release(struct kref *kref)
 {
 	struct colo_node *node = container_of(kref, struct colo_node, refcnt);
 
 	pr_dbg("%s, destroy node:%d\n", __func__, node->vm_pid);
 	list_del_rcu (&node->list);
-	synchronize_rcu();
-	kfree (node);
-	node = NULL;
+	call_rcu(&node->rcu, colo_node_destroy_rcu);
 }
 
 void colo_node_put(struct colo_node *node)
@@ -288,6 +307,10 @@ static const struct nfnetlink_subsystem nfulnl_subsys = {
 	.cb		= nfnl_colo_cb,
 };
 
+/*
+ * It is not allowed to call any functions that could lead to sleep in
+ * this notifier callback.
+ */
 static int colonl_close_event(struct notifier_block *nb,
 			unsigned long event, void *ptr)
 {
@@ -300,13 +323,10 @@ static int colonl_close_event(struct notifier_block *nb,
 
 	rcu_read_lock();
 	node = colo_find_node(n->portid); /* Should this be changed to colo_node_get ? */
+	rcu_read_unlock();
 	if (node == NULL) {
-		rcu_read_unlock();
 		return NOTIFY_DONE;
 	}
-	if (node->destroy_notify_cb)
-		node->destroy_notify_cb(node);
-	rcu_read_unlock();
 
 	colo_node_destroy(node);
 	return NOTIFY_DONE;
@@ -335,6 +355,7 @@ static void __exit nfnetlink_colo_fini(void)
 {
 	nfnetlink_subsys_unregister(&nfulnl_subsys);
 	netlink_unregister_notifier(&colonl_notifier);
+	rcu_barrier();  /* Wait for completion of call_rcu()'s */
 }
 
 MODULE_DESCRIPTION("netfilter userspace colo communication");
