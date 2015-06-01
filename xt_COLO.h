@@ -55,6 +55,8 @@ struct colo_secondary {
  /* Each VM has a colo_node struct */
 struct colo_node {
         struct list_head     list; /* point to next colo node */
+	struct rcu_head rcu;
+
         pid_t                      vm_pid; /* Help to find the this node */
         int   mode; /* in master side or slave side */
 
@@ -63,6 +65,7 @@ struct colo_node {
 	struct list_head	conn_list;
 	struct list_head	wait_list;
 	spinlock_t		lock;
+	struct work_struct	destroy_work;
 	int	(*do_checkpoint_cb)(struct colo_node *node);
 	void	(*destroy_notify_cb)(struct colo_node *node);
 	union {
