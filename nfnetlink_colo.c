@@ -61,7 +61,8 @@ static void colo_node_destroy_fn(struct work_struct *work)
 	struct colo_node *node = container_of(work, struct colo_node, destroy_work);
 
 	pr_dbg("%s: destroy node:%d and kcolo:%d thread\n", __func__, node->vm_pid, node->vm_pid);
-	node->destroy_notify_cb(node);
+	if (node->destroy_notify_cb)
+		node->destroy_notify_cb(node);
 	kfree(node);
 }
 
