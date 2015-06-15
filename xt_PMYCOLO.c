@@ -50,6 +50,7 @@ struct forward_device {
 static struct forward_device forward_device_head = {
 	.list = LIST_HEAD_INIT(forward_device_head.list),
 };
+DEFINE_MUTEX(forward_device_lock);
 
 static bool colo_compare_skb(struct sk_buff *skb,
 			     struct sk_buff *skb1,
@@ -1438,14 +1439,17 @@ out:
 
 static int setup_forward_netdev(const char *dev_name)
 {
-	struct forward_device *fw_dev = NULL, *fw_next;
+	struct forward_device *fw_dev = NULL;
 	int ret;
 
-	list_for_each_entry_safe(fw_dev, fw_next, &forward_device_head.list, list) {
+	mutex_lock(&forward_device_lock);
+	list_for_each_entry(fw_dev, &forward_device_head.list, list) {
 		pr_dbg("Got %s from fwdev_list\n", fw_dev->name);
 		if (!strcmp(fw_dev->name, dev_name)) {
 			fw_dev->rfc++;
-			pr_dbg("%s have registered as a forward device, rfc %d\n", dev_name, fw_dev->rfc);
+			pr_dbg("%s have registered as a forward device, rfc %d\n",
+				dev_name, fw_dev->rfc);
+			mutex_unlock(&forward_device_lock);
 			return 0;
 		}
 	}
@@ -1454,7 +1458,8 @@ static int setup_forward_netdev(const char *dev_name)
 	fw_dev = kzalloc(sizeof(*fw_dev), GFP_ATOMIC);
 	if (!fw_dev) {
 		pr_dbg("Can not alloc memory for ptype\n");
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto err;
 	}
 
 	fw_dev->ptype.dev = dev_get_by_name(&init_net, dev_name);
@@ -1480,17 +1485,21 @@ static int setup_forward_netdev(const char *dev_name)
 	pr_dbg("Register proto\n");
 	dev_add_pack(&fw_dev->ptype);
 
-        return 0;
+	mutex_unlock(&forward_device_lock);
+	return 0;
+
 err:
-        kfree(fw_dev);
-        return ret;
+	kfree(fw_dev);
+	mutex_unlock(&forward_device_lock);
+	return ret;
 }
 
 static void cleanup_forward_netdev(const char *dev_name)
 {
-    struct forward_device *fw_dev, *fw_next;
+	struct forward_device *fw_dev;
 
-    list_for_each_entry_safe(fw_dev, fw_next, &forward_device_head.list, list) {
+	mutex_lock(&forward_device_lock);
+	list_for_each_entry(fw_dev, &forward_device_head.list, list) {
 		if (strcmp(fw_dev->name, dev_name)) {
 			continue;
 		}
@@ -1503,10 +1512,11 @@ static void cleanup_forward_netdev(const char *dev_name)
 			dev_put(fw_dev->ptype.dev);
 			list_del(&fw_dev->list);
 			kfree(fw_dev);
+			break;
 		}
 		pr_dbg("%s fw_dev->rfc = %d\n", fw_dev->name, fw_dev->rfc);
 	}
-
+	mutex_unlock(&forward_device_lock);
 }
 
 static int colo_primary_tg_check(const struct xt_tgchk_param *par)
