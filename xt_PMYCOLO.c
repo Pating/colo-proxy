@@ -1445,13 +1445,20 @@ static int setup_forward_netdev(const char *dev_name)
 	mutex_lock(&forward_device_lock);
 	list_for_each_entry(fw_dev, &forward_device_head.list, list) {
 		pr_dbg("Got %s from fwdev_list\n", fw_dev->name);
-		if (!strcmp(fw_dev->name, dev_name)) {
-			fw_dev->rfc++;
-			pr_dbg("%s have registered as a forward device, rfc %d\n",
-				dev_name, fw_dev->rfc);
-			mutex_unlock(&forward_device_lock);
-			return 0;
+		if (strcmp(fw_dev->name, dev_name)) {
+			continue;
 		}
+
+		if (fw_dev->rfc == INT_MAX) {
+			ret = -EBUSY;
+			goto err;
+		}
+
+		fw_dev->rfc++;
+		pr_dbg("%s have registered as a forward device, rfc %d\n",
+			dev_name, fw_dev->rfc);
+		mutex_unlock(&forward_device_lock);
+		return 0;
 	}
 
 	pr_dbg("Register %s as a forward device\n", dev_name);
@@ -1478,7 +1485,7 @@ static int setup_forward_netdev(const char *dev_name)
 	rtnl_unlock();
 	if (ret < 0) {
 		pr_dbg("dev_set_promiscuity failed\n");
-		goto err;
+		goto err_promiscuity;
 	}
 
 	list_add_tail(&fw_dev->list, &forward_device_head.list);
@@ -1488,6 +1495,8 @@ static int setup_forward_netdev(const char *dev_name)
 	mutex_unlock(&forward_device_lock);
 	return 0;
 
+err_promiscuity:
+	dev_put(fw_dev->ptype.dev);
 err:
 	kfree(fw_dev);
 	mutex_unlock(&forward_device_lock);
@@ -1529,13 +1538,13 @@ static int colo_primary_tg_check(const struct xt_tgchk_param *par)
 
 	node = colo_node_get(info->index);
 	if (node == NULL) {
-		pr_dbg("Can not find colo node whose pid is %d\n", info->index);
+		pr_err("Can not find colo node whose pid is %d\n", info->index);
 		return -EINVAL;
 	}
 
 	ret = setup_forward_netdev(dev_name);
 	if (ret < 0) {
-		return ret;
+		goto err;
 	}
 	colo = &node->u.p;
 
@@ -1547,10 +1556,9 @@ static int colo_primary_tg_check(const struct xt_tgchk_param *par)
 
 	colo->task = kthread_run(kcolo_thread, colo, "kcolo%u", info->index);
 	if (IS_ERR(colo->task)) {
-		pr_dbg("colo_tg: fail to create kcolo thread\n");
+		pr_err("colo_tg: fail to create kcolo thread\n");
 		ret = PTR_ERR(colo->task);
-		colo_node_put(node);
-		goto err;
+		goto err_kthread;
 	}
 
 	init_waitqueue_head(&colo->wait);
@@ -1566,6 +1574,9 @@ static int colo_primary_tg_check(const struct xt_tgchk_param *par)
 out:
 	info->colo = colo;
 	return 0;
+
+err_kthread:
+	cleanup_forward_netdev(dev_name);
 err:
 	colo_node_put(node);
 	return ret;
