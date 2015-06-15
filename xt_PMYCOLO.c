@@ -829,7 +829,11 @@ static int colo_enqueue_packet(struct nf_queue_entry *entry, unsigned int ptr)
 		pr_dbg("master: gso again???!!!\n");
 	}
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 1, 0)
+	if (entry->state.hook != NF_INET_PRE_ROUTING) {
+#else
 	if (entry->hook != NF_INET_PRE_ROUTING) {
+#endif
 		pr_dbg("packet is not on pre routing chain\n");
 		return -1;
 	}
@@ -839,7 +843,12 @@ static int colo_enqueue_packet(struct nf_queue_entry *entry, unsigned int ptr)
 		pr_dbg("%s: Could not find node: %d\n",__func__, conn->vm_pid);
 		return -1;
 	}
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 1, 0)
+	switch (entry->state.pf) {
+#else
 	switch (entry->pf) {
+#endif
 	case NFPROTO_IPV4:
 		skb->protocol = htons(ETH_P_IP);
 		break;
@@ -1133,8 +1142,12 @@ out:
 
 static unsigned int
 colo_slaver_queue_hook(const struct nf_hook_ops *ops, struct sk_buff *skb,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 1, 0)
+		     const struct nf_hook_state *unused)
+#else
 		       const struct net_device *in, const struct net_device *out,
 		       int (*okfn)(struct sk_buff *))
+#endif
 {
 	struct nf_conn *ct;
 	struct nf_conn_colo *conn;
@@ -1193,8 +1206,12 @@ out_unlock:
 
 static unsigned int
 colo_slaver_arp_hook(const struct nf_hook_ops *ops, struct sk_buff *skb,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 1, 0)
+		     const struct nf_hook_state *unused)
+#else
 		     const struct net_device *in, const struct net_device *out,
 		     int (*okfn)(struct sk_buff *))
+#endif
 {
 	unsigned int ret = NF_ACCEPT;
 	const struct arphdr *arp;
