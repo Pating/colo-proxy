@@ -50,6 +50,7 @@ struct forward_device {
 static struct forward_device forward_device_head = {
 	.list = LIST_HEAD_INIT(forward_device_head.list),
 };
+DEFINE_MUTEX(forward_device_lock);
 
 static bool colo_compare_skb(struct sk_buff *skb,
 			     struct sk_buff *skb1,
@@ -829,7 +830,11 @@ static int colo_enqueue_packet(struct nf_queue_entry *entry, unsigned int ptr)
 		pr_dbg("master: gso again???!!!\n");
 	}
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 1, 0)
+	if (entry->state.hook != NF_INET_PRE_ROUTING) {
+#else
 	if (entry->hook != NF_INET_PRE_ROUTING) {
+#endif
 		pr_dbg("packet is not on pre routing chain\n");
 		return -1;
 	}
@@ -839,7 +844,12 @@ static int colo_enqueue_packet(struct nf_queue_entry *entry, unsigned int ptr)
 		pr_dbg("%s: Could not find node: %d\n",__func__, conn->vm_pid);
 		return -1;
 	}
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 1, 0)
+	switch (entry->state.pf) {
+#else
 	switch (entry->pf) {
+#endif
 	case NFPROTO_IPV4:
 		skb->protocol = htons(ETH_P_IP);
 		break;
@@ -1133,8 +1143,12 @@ out:
 
 static unsigned int
 colo_slaver_queue_hook(const struct nf_hook_ops *ops, struct sk_buff *skb,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 1, 0)
+		     const struct nf_hook_state *unused)
+#else
 		       const struct net_device *in, const struct net_device *out,
 		       int (*okfn)(struct sk_buff *))
+#endif
 {
 	struct nf_conn *ct;
 	struct nf_conn_colo *conn;
@@ -1193,8 +1207,12 @@ out_unlock:
 
 static unsigned int
 colo_slaver_arp_hook(const struct nf_hook_ops *ops, struct sk_buff *skb,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 1, 0)
+		     const struct nf_hook_state *unused)
+#else
 		     const struct net_device *in, const struct net_device *out,
 		     int (*okfn)(struct sk_buff *))
+#endif
 {
 	unsigned int ret = NF_ACCEPT;
 	const struct arphdr *arp;
@@ -1421,23 +1439,34 @@ out:
 
 static int setup_forward_netdev(const char *dev_name)
 {
-	struct forward_device *fw_dev = NULL, *fw_next;
+	struct forward_device *fw_dev = NULL;
 	int ret;
 
-	list_for_each_entry_safe(fw_dev, fw_next, &forward_device_head.list, list) {
+	mutex_lock(&forward_device_lock);
+	list_for_each_entry(fw_dev, &forward_device_head.list, list) {
 		pr_dbg("Got %s from fwdev_list\n", fw_dev->name);
-		if (!strcmp(fw_dev->name, dev_name)) {
-			fw_dev->rfc++;
-			pr_dbg("%s have registered as a forward device, rfc %d\n", dev_name, fw_dev->rfc);
-			return 0;
+		if (strcmp(fw_dev->name, dev_name)) {
+			continue;
 		}
+
+		if (fw_dev->rfc == INT_MAX) {
+			ret = -EBUSY;
+			goto err;
+		}
+
+		fw_dev->rfc++;
+		pr_dbg("%s have registered as a forward device, rfc %d\n",
+			dev_name, fw_dev->rfc);
+		mutex_unlock(&forward_device_lock);
+		return 0;
 	}
 
 	pr_dbg("Register %s as a forward device\n", dev_name);
-	fw_dev = kzalloc(sizeof(*fw_dev), GFP_ATOMIC);
+	fw_dev = kzalloc(sizeof(*fw_dev), GFP_KERNEL);
 	if (!fw_dev) {
 		pr_dbg("Can not alloc memory for ptype\n");
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto err;
 	}
 
 	fw_dev->ptype.dev = dev_get_by_name(&init_net, dev_name);
@@ -1456,24 +1485,30 @@ static int setup_forward_netdev(const char *dev_name)
 	rtnl_unlock();
 	if (ret < 0) {
 		pr_dbg("dev_set_promiscuity failed\n");
-		goto err;
+		goto err_promiscuity;
 	}
 
 	list_add_tail(&fw_dev->list, &forward_device_head.list);
 	pr_dbg("Register proto\n");
 	dev_add_pack(&fw_dev->ptype);
 
-        return 0;
+	mutex_unlock(&forward_device_lock);
+	return 0;
+
+err_promiscuity:
+	dev_put(fw_dev->ptype.dev);
 err:
-        kfree(fw_dev);
-        return ret;
+	kfree(fw_dev);
+	mutex_unlock(&forward_device_lock);
+	return ret;
 }
 
 static void cleanup_forward_netdev(const char *dev_name)
 {
-    struct forward_device *fw_dev, *fw_next;
+	struct forward_device *fw_dev;
 
-    list_for_each_entry_safe(fw_dev, fw_next, &forward_device_head.list, list) {
+	mutex_lock(&forward_device_lock);
+	list_for_each_entry(fw_dev, &forward_device_head.list, list) {
 		if (strcmp(fw_dev->name, dev_name)) {
 			continue;
 		}
@@ -1486,10 +1521,11 @@ static void cleanup_forward_netdev(const char *dev_name)
 			dev_put(fw_dev->ptype.dev);
 			list_del(&fw_dev->list);
 			kfree(fw_dev);
+			break;
 		}
 		pr_dbg("%s fw_dev->rfc = %d\n", fw_dev->name, fw_dev->rfc);
 	}
-
+	mutex_unlock(&forward_device_lock);
 }
 
 static int colo_primary_tg_check(const struct xt_tgchk_param *par)
@@ -1502,13 +1538,13 @@ static int colo_primary_tg_check(const struct xt_tgchk_param *par)
 
 	node = colo_node_get(info->index);
 	if (node == NULL) {
-		pr_dbg("Can not find colo node whose pid is %d\n", info->index);
+		pr_err("Can not find colo node whose pid is %d\n", info->index);
 		return -EINVAL;
 	}
 
 	ret = setup_forward_netdev(dev_name);
 	if (ret < 0) {
-		return ret;
+		goto err;
 	}
 	colo = &node->u.p;
 
@@ -1520,10 +1556,9 @@ static int colo_primary_tg_check(const struct xt_tgchk_param *par)
 
 	colo->task = kthread_run(kcolo_thread, colo, "kcolo%u", info->index);
 	if (IS_ERR(colo->task)) {
-		pr_dbg("colo_tg: fail to create kcolo thread\n");
+		pr_err("colo_tg: fail to create kcolo thread\n");
 		ret = PTR_ERR(colo->task);
-		colo_node_put(node);
-		goto err;
+		goto err_kthread;
 	}
 
 	init_waitqueue_head(&colo->wait);
@@ -1539,6 +1574,9 @@ static int colo_primary_tg_check(const struct xt_tgchk_param *par)
 out:
 	info->colo = colo;
 	return 0;
+
+err_kthread:
+	cleanup_forward_netdev(dev_name);
 err:
 	colo_node_put(node);
 	return ret;

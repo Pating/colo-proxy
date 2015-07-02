@@ -18,6 +18,7 @@
 #include <linux/netfilter/xt_COLO.h>
 #include <net/netfilter/nf_conntrack_core.h>
 #include <net/tcp.h>
+#include <linux/version.h>
 #include "xt_COLO.h"
 #include "nf_conntrack_colo.h"
 #include "nfnetlink_colo.h"
@@ -28,8 +29,12 @@ MODULE_DESCRIPTION("Xtables: secondary proxy module for colo.");
 
 static unsigned int
 colo_secondary_hook(const struct nf_hook_ops *ops, struct sk_buff *skb,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 1, 0)
+		     const struct nf_hook_state *unused)
+#else
 		    const struct net_device *in, const struct net_device *out,
 		    int (*okfn)(struct sk_buff *))
+#endif
 {
 	enum ip_conntrack_info ctinfo;
 	struct nf_conn_colo *conn;
