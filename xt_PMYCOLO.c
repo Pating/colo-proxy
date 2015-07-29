@@ -842,9 +842,9 @@ static int colo_enqueue_packet(struct nf_queue_entry *entry, unsigned int ptr)
 	node = colo_node_get(conn->vm_pid);
 	if (!node) {
 		pr_dbg("%s: Could not find node: %d\n",__func__, conn->vm_pid);
-		return -1;
+		nf_reinject(entry, NF_STOP);
+		return 0;
 	}
-
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 1, 0)
 	switch (entry->state.pf) {
 #else
@@ -883,7 +883,7 @@ static int colo_enqueue_packet(struct nf_queue_entry *entry, unsigned int ptr)
 	spin_unlock_bh(&conn->lock);
 
 	if (ret < 0) {
-		colo_node_put (node);
+		colo_node_put(node);
 		return ret;
 	}
 
