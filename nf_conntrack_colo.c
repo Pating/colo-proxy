@@ -60,6 +60,9 @@ static void nfct_init_colo(struct nf_conn_colo *conn,
 	spin_lock_init(&conn->chk_lock);
 	conn->flags |= flag;
 	conn->vm_pid = vm_pid;
+	conn->init = true;
+	smp_wmb();
+
 }
 
 static
@@ -92,6 +95,7 @@ struct nf_conn_colo *nfct_create_colo(struct nf_conn *ct, u32 vm_pid, u32 flag)
 	}
 
 	conn->nfct = &ct->ct_general;
+	conn->init = false;
 
 	return conn;
 }
@@ -188,6 +192,8 @@ static void nf_ct_colo_extend_destroy(struct nf_conn *ct)
 	conn = nfct_colo(ct);
 	if (conn == NULL)
 		return;
+	conn->init = false;
+	smp_wmb();
 
 	node = colo_node_get(conn->vm_pid);
 	if (node == NULL)
