@@ -1175,9 +1175,9 @@ colo_slaver_queue_hook(const struct nf_hook_ops *ops, struct sk_buff *skb,
 	skb->nfct = &ct->ct_general;
 
 	conn = nfct_colo(ct);
-	if (conn == NULL) {
+	if (conn == NULL || !conn->init) {
 		/* this is rare, since conntrack is created when client's first packet coming */
-		pr_dbg("no colo conn\n");
+		pr_dbg("no colo conn %p\n", conn);
 		goto out_unlock;
 	}
 
