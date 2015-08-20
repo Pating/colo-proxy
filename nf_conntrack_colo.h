@@ -54,10 +54,21 @@ struct nf_conn_colo {
 	char			proto[];
 };
 
+struct nf_ct_ext_colo {
+    struct nf_conn_colo *conn;
+};
+
+static inline
+struct nf_ct_ext_colo *__nfct_colo(const struct nf_conn *ct)
+{
+	return (struct nf_ct_ext_colo *)nf_ct_ext_find(ct, NF_CT_EXT_COLO);
+}
+
 static inline
 struct nf_conn_colo *nfct_colo(const struct nf_conn *ct)
 {
-	return (struct nf_conn_colo *) nf_ct_ext_find(ct, NF_CT_EXT_COLO);
+	struct nf_ct_ext_colo *colo = __nfct_colo(ct);
+	return colo ? colo->conn : NULL;
 }
 
 struct nf_conn_colo *

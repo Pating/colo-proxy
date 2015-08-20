@@ -68,6 +68,7 @@ static void nfct_init_colo(struct nf_conn_colo *conn,
 static
 struct nf_conn_colo *nfct_create_colo(struct nf_conn *ct, u32 vm_pid, u32 flag)
 {
+	struct nf_ct_ext_colo *colo = NULL;
 	struct nf_conn_colo *conn = NULL;
 	size_t length = 0;
 
@@ -87,15 +88,21 @@ struct nf_conn_colo *nfct_create_colo(struct nf_conn *ct, u32 vm_pid, u32 flag)
 		}
 	}
 
-	conn = (struct nf_conn_colo *) nf_ct_ext_add_length(ct, NF_CT_EXT_COLO,
+	colo = (struct nf_ct_ext_colo *) nf_ct_ext_add_length(ct, NF_CT_EXT_COLO,
 							    length, GFP_ATOMIC);
-	if (!conn) {
+	if (!colo) {
 		pr_dbg("add extend failed\n");
 		return NULL;
 	}
 
+	conn = kzalloc(sizeof(*conn), GFP_ATOMIC);
+	if (!conn) {
+		printk("can not malloc conn\n");
+		return NULL;
+	}
 	conn->nfct = &ct->ct_general;
 	conn->init = false;
+	colo->conn = conn;
 
 	return conn;
 }
@@ -132,13 +139,19 @@ EXPORT_SYMBOL_GPL(nf_ct_colo_get);
 
 static void nf_ct_colo_extend_move(void *new, void *old)
 {
-	struct nf_conn_colo *new_conn = new;
-	struct nf_conn_colo *old_conn = old;
+	struct nf_ct_ext_colo *new_colo = new, *old_colo = old;
+	struct nf_conn_colo *new_conn = kzalloc(sizeof(*new_conn), GFP_ATOMIC);
+	struct nf_conn_colo *old_conn = old_colo->conn;
 	struct colo_node *node;
 	unsigned long flags;
 
 	pr_dbg("nf_ct_colo_extend_move new %p, old %p\n", new, old);
-
+	new_colo->conn = new_conn;
+	if (!new_conn) {
+		printk("can not malloc new conn\n");
+		BUG_ON(1);
+		return;
+	}
 	node = colo_node_get(old_conn->vm_pid);
 
 	if (WARN_ONCE(node == NULL, "Can not find node whose index %d!\n",
@@ -181,11 +194,14 @@ out:
 	if (!list_empty(&old_conn->conn_list))
 		list_replace(&old_conn->conn_list, &new_conn->conn_list);
 	spin_unlock_bh(&node->lock);
+	kfree(old_conn);
+	old_colo->conn = NULL;
 	colo_node_put(node);
 }
 
 static void nf_ct_colo_extend_destroy(struct nf_conn *ct)
 {
+	struct nf_ct_ext_colo *colo;
 	struct nf_conn_colo *conn;
 	struct colo_node *node;
 
@@ -202,16 +218,18 @@ static void nf_ct_colo_extend_destroy(struct nf_conn *ct)
 	spin_lock_bh(&node->lock);
 	list_del_init(&conn->conn_list);
 	spin_unlock_bh(&node->lock);
-
+	kfree(conn);
+	colo = __nfct_colo(ct);
+	colo->conn = NULL;
 out:
 	colo_node_put(node);
 }
 
 static struct nf_ct_ext_type nf_ct_colo_extend __read_mostly = {
-	.len		= sizeof(struct nf_conn_colo),
+	.len		= sizeof(struct nf_ct_ext_colo),
 	.move		= nf_ct_colo_extend_move,
 	.destroy	= nf_ct_colo_extend_destroy,
-	.align		= __alignof__(struct nf_conn_colo),
+	.align		= __alignof__(struct nf_ct_ext_colo),
 	.id		= NF_CT_EXT_COLO,
 };
 
