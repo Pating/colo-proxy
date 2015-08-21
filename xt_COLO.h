@@ -20,7 +20,7 @@
 #include <net/tcp.h>
 #include <net/netfilter/nf_conntrack_l3proto.h>
 
-#define DEBUG
+//#define DEBUG
 
 #ifdef DEBUG
 #define pr_dbg(fmt, ...) printk(pr_fmt(fmt), ##__VA_ARGS__)
