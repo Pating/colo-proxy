@@ -81,6 +81,7 @@ struct nf_conn_colo *nfct_create_colo(struct nf_conn *ct, u32 vm_pid, u32 flag)
 			/* seq adjust is only meaningful for TCP conn */
 			if (!nfct_seqadj_ext_add(ct)) {
 				pr_dbg("failed to add SEQADJ extension\n");
+				return NULL;
 			}
 		}
 	}
