@@ -80,7 +80,7 @@ struct nf_conn_colo *nfct_create_colo(struct nf_conn *ct, u32 vm_pid, u32 flag)
 		if (flag & COLO_CONN_SECONDARY) {
 			/* seq adjust is only meaningful for TCP conn */
 			if (!nfct_seqadj_ext_add(ct)) {
-				pr_dbg("failed to add SEQADJ extension\n");
+				pr_err("failed to add SEQADJ extension\n");
 				return NULL;
 			}
 		}
@@ -89,13 +89,13 @@ struct nf_conn_colo *nfct_create_colo(struct nf_conn *ct, u32 vm_pid, u32 flag)
 	colo = (struct nf_ct_ext_colo *) nf_ct_ext_add(ct, NF_CT_EXT_COLO,
 							    GFP_ATOMIC);
 	if (!colo) {
-		pr_dbg("add extend failed\n");
+		pr_err("add colo extend failed\n");
 		return NULL;
 	}
 
 	conn = kzalloc(sizeof(*conn), GFP_ATOMIC);
 	if (!conn) {
-		printk("can not malloc conn\n");
+		pr_err("can not malloc conn\n");
 		return NULL;
 	}
 	conn->nfct = &ct->ct_general;
@@ -122,7 +122,7 @@ nf_ct_colo_get(struct sk_buff *skb, struct colo_node *node, u32 flag)
 	if (colo_conn == NULL) {
 		colo_conn = nfct_create_colo(ct, node->vm_pid, flag);
 		if (colo_conn == NULL) {
-			pr_dbg("create colo conn failed!\n");
+			pr_err("create colo conn failed!\n");
 			return NULL;
 		}
 
@@ -146,7 +146,7 @@ static void nf_ct_colo_extend_move(void *new, void *old)
 	pr_dbg("nf_ct_colo_extend_move new %p, old %p\n", new, old);
 	new_colo->conn = new_conn;
 	if (!new_conn) {
-		printk("can not malloc new conn\n");
+		pr_err("can not malloc new conn\n");
 		BUG_ON(1);
 		return;
 	}
