@@ -145,7 +145,7 @@ __colo_compare_common(struct colo_primary *colo,
 	skb_queue_head_init(&slaver_head);
 
 	if (nf_ct_protonum((struct nf_conn *)conn->nfct) == IPPROTO_TCP) {
-		p = (union nf_conn_colo_tcp *) conn->proto;
+		p = &conn->proto;
 	}
 
 	spin_lock_bh(&conn->lock);
@@ -395,7 +395,7 @@ static bool colo_pre_compare_tcp_skb(struct nf_conn_colo *conn,
 {
 	struct sk_buff *skb = e->skb;
 	struct colo_tcp_cb *cb = COLO_SKB_CB(skb);
-	union nf_conn_colo_tcp *p = (union nf_conn_colo_tcp *) conn->proto;
+	union nf_conn_colo_tcp *p = &conn->proto;
 	u32 win = cb->win << p->p.mscale;
 
 	pr_dbg("master skb seq %u, end %u, ack %u, max ack %u, compared_seq %u, win %u, slaver win %u\n",
@@ -709,7 +709,7 @@ static int colo_enqueue_tcp_packet(struct nf_conn_colo *conn,
 {
 	struct sk_buff *skb = entry->skb;
 	struct tcphdr *th;
-	union nf_conn_colo_tcp *proto = (union nf_conn_colo_tcp *) conn->proto;
+	union nf_conn_colo_tcp *proto = &conn->proto;
 	struct colo_tcp_cb *cb, *cb1;
 	struct nf_queue_entry *e, *e_next;
 
@@ -946,7 +946,7 @@ colo_slaver_enqueue_tcp_packet(struct nf_conn_colo *conn,
 			       struct sk_buff *skb)
 {
 	struct tcphdr *th;
-	union nf_conn_colo_tcp *proto = (union nf_conn_colo_tcp *) conn->proto;
+	union nf_conn_colo_tcp *proto = &conn->proto;
 	struct colo_tcp_cb *cb;
 	bool stolen = false;
 	u32 win;
@@ -1266,7 +1266,7 @@ static struct nf_hook_ops colo_primary_ops[] __read_mostly = {
 static void colo_tcp_do_checkpoint(struct nf_conn_colo *conn)
 {
 	struct nf_queue_entry *e, *n;
-	union nf_conn_colo_tcp *proto = (union nf_conn_colo_tcp *) conn->proto;
+	union nf_conn_colo_tcp *proto = &conn->proto;
 
 	spin_lock_bh(&conn->lock);
 	proto->p.compared_seq = proto->p.mrcv_nxt;

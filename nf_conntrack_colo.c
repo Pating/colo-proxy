@@ -31,7 +31,7 @@ static void nfct_init_colo(struct nf_conn_colo *conn,
 	union nf_conn_colo_tcp *proto = NULL;
 
 	if (nf_ct_protonum((struct nf_conn *)conn->nfct) == IPPROTO_TCP) {
-		proto = (union nf_conn_colo_tcp *) conn->proto;
+		proto = &conn->proto;
 
 		memset(proto, 0, sizeof(*proto));
 
@@ -70,7 +70,6 @@ struct nf_conn_colo *nfct_create_colo(struct nf_conn *ct, u32 vm_pid, u32 flag)
 {
 	struct nf_ct_ext_colo *colo = NULL;
 	struct nf_conn_colo *conn = NULL;
-	size_t length = 0;
 
 	if (nf_ct_is_confirmed(ct)) {
 		pr_dbg("conntrack %p is confirmed!\n", ct);
@@ -78,8 +77,6 @@ struct nf_conn_colo *nfct_create_colo(struct nf_conn *ct, u32 vm_pid, u32 flag)
 	}
 
 	if (nf_ct_protonum(ct) == IPPROTO_TCP) {
-		length = sizeof(union nf_conn_colo_tcp);
-
 		if (flag & COLO_CONN_SECONDARY) {
 			/* seq adjust is only meaningful for TCP conn */
 			if (!nfct_seqadj_ext_add(ct)) {
@@ -88,8 +85,8 @@ struct nf_conn_colo *nfct_create_colo(struct nf_conn *ct, u32 vm_pid, u32 flag)
 		}
 	}
 
-	colo = (struct nf_ct_ext_colo *) nf_ct_ext_add_length(ct, NF_CT_EXT_COLO,
-							    length, GFP_ATOMIC);
+	colo = (struct nf_ct_ext_colo *) nf_ct_ext_add(ct, NF_CT_EXT_COLO,
+							    GFP_ATOMIC);
 	if (!colo) {
 		pr_dbg("add extend failed\n");
 		return NULL;
@@ -176,9 +173,12 @@ static void nf_ct_colo_extend_move(void *new, void *old)
 	if (nf_ct_protonum((struct nf_conn *)old_conn->nfct) == IPPROTO_TCP) {
 		union nf_conn_colo_tcp *old_proto, *new_proto;
 
-		old_proto = (union nf_conn_colo_tcp *) old_conn->proto;
-		new_proto = (union nf_conn_colo_tcp *) new_conn->proto;
+		old_proto = &old_conn->proto;
+		new_proto = &new_conn->proto;
+		memcpy(new_proto, old_proto, sizeof(*old_proto));
+	}
 
+#if 0
 		if (old_conn->flags | COLO_CONN_SECONDARY) {
 			new_proto->s.sec_isn = old_proto->s.sec_isn;
 			new_proto->s.pri_isn = old_proto->s.pri_isn;
@@ -186,6 +186,7 @@ static void nf_ct_colo_extend_move(void *new, void *old)
 		}
 	}
 out:
+#endif
 	new_conn->vm_pid = old_conn->vm_pid;
 	new_conn->nfct = old_conn->nfct;
 

@@ -52,7 +52,7 @@ colo_secondary_hook(const struct nf_hook_ops *ops, struct sk_buff *skb,
 	    (conn->flags & COLO_CONN_BYPASS))
 		return NF_STOP;
 
-	proto = (union nf_conn_colo_tcp *) conn->proto;
+	proto = &conn->proto;
 
 	th = colo_get_tcphdr(ops->pf, skb, NULL, NULL);
 	if (th == NULL)
