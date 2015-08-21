@@ -51,7 +51,7 @@ struct nf_conn_colo {
 	u32			flags;
 	u32			vm_pid; /* Distinguish which VM it belongs to .*/
 	bool			init;
-	char			proto[];
+	union nf_conn_colo_tcp	proto;
 };
 
 struct nf_ct_ext_colo {
