@@ -1450,6 +1450,7 @@ static int setup_forward_netdev(const char *dev_name)
 		}
 
 		if (fw_dev->rfc == INT_MAX) {
+			pr_err("forward device reference overflow\n");
 			ret = -EBUSY;
 			goto err;
 		}
@@ -1464,14 +1465,14 @@ static int setup_forward_netdev(const char *dev_name)
 	pr_dbg("Register %s as a forward device\n", dev_name);
 	fw_dev = kzalloc(sizeof(*fw_dev), GFP_KERNEL);
 	if (!fw_dev) {
-		pr_dbg("Can not alloc memory for ptype\n");
+		pr_err("Can not alloc memory for ptype\n");
 		ret = -ENOMEM;
 		goto err;
 	}
 
 	fw_dev->ptype.dev = dev_get_by_name(&init_net, dev_name);
 	if (fw_dev->ptype.dev == NULL) {
-		pr_dbg("Can't find net device %s\n", dev_name);
+		pr_err("Can't find net device %s\n", dev_name);
 		ret = -EINVAL;
 		goto err;
 	}
@@ -1484,7 +1485,7 @@ static int setup_forward_netdev(const char *dev_name)
 	ret = dev_set_promiscuity(fw_dev->ptype.dev, 1);
 	rtnl_unlock();
 	if (ret < 0) {
-		pr_dbg("dev_set_promiscuity failed\n");
+		pr_err("dev_set_promiscuity failed\n");
 		goto err_promiscuity;
 	}
 
