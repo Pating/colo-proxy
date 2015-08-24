@@ -1412,7 +1412,7 @@ next:
 					struct nf_conn_colo,
 					conn_list);
 
-		nf_conntrack_get__(conn->nfct);
+//		nf_conntrack_get__(conn->nfct);
 		list_del_init(&conn->conn_list);
 		spin_unlock_bh(&node->lock);
 	} else {
@@ -1423,7 +1423,7 @@ next:
 
 	colo_primary_cleanup_conn(conn);
 
-	nf_conntrack_put__(conn->nfct);
+//	nf_conntrack_put__(conn->nfct);
 
 	goto next;
 }
