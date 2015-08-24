@@ -236,7 +236,7 @@ next:
 			if (test_bit(IPS_DYING_BIT, &ct->status)) {
 				/* timeout, it's a long time, there is something wrong
 				 * with slaver, we should help him. */
-				pr_dbg("conn %p timeout, should do checkpoint\n", ct);
+				pr_err("DO checkpoint, reason: conn %p timeout, should do checkpoint\n", ct);
 				checkpoint = true;
 			}
 
@@ -302,7 +302,7 @@ static bool colo_compare_other_skb(struct sk_buff *skb,
 	*free = COLO_COMPARE_FREE_MASTER | COLO_COMPARE_FREE_SLAVER;
 
 	if (skb->len != skb1->len) {
-		pr_dbg("master skb length %d, slaver length %d\n",
+		pr_err("DO checkpoint, reason: master skb length %d, slaver length %d\n",
 			skb->len, skb1->len);
 		return false;
 	}
@@ -332,7 +332,7 @@ static bool colo_compare_icmp_skb(struct sk_buff *skb,
 				return false;
 		}
 	} else {
-		pr_dbg("master type,code %u:%u, slaver %u:%u\n",
+		pr_err("DO checkpoint, reason: master type,code %u:%u, slaver %u:%u\n",
 			cb->type, cb->code, cb1->type, cb1->code);
 		return false;
 	}
@@ -353,7 +353,7 @@ static bool colo_compare_udp_skb(struct sk_buff *skb,
 	*free = COLO_COMPARE_FREE_MASTER | COLO_COMPARE_FREE_SLAVER;
 
 	if (skb->len != skb1->len) {
-		pr_dbg("master skb length %d, slaver length %d\n",
+		pr_err("Do checkpoint, reason: master skb length %d, slaver length %d\n",
 			skb->len, skb1->len);
 		return false;
 	}
@@ -362,7 +362,7 @@ static bool colo_compare_udp_skb(struct sk_buff *skb,
 	cb1 = COLO_SKB_CB(skb1);
 
 	if (cb->size != cb1->size) {
-		pr_dbg("master udp payload %u, slaver payload %u\n",
+		pr_err("DO checkpoint, reason: master udp payload %u, slaver payload %u\n",
 			cb->size, cb1->size);
 		return false;
 	}
@@ -475,7 +475,7 @@ static bool colo_compare_tcp_skb(struct sk_buff *skb,
 	/* both rst packet */
 	if (unlikely(cb->rst || cb1->rst)) {
 		if ((cb->rst ^ cb1->rst) || (cb->seq_end != cb1->seq_end)) {
-			pr_dbg("rst diff cb %d, seq_end %u, cb1 %d, seq_end %u\n",
+			pr_err("DO checkpoint, reason: rst diff cb %d, seq_end %u, cb1 %d, seq_end %u\n",
 				cb->rst, cb->seq_end, cb1->rst, cb1->seq_end);
 			return false;
 		}
@@ -497,7 +497,7 @@ static bool colo_compare_tcp_skb(struct sk_buff *skb,
 	}
 
 	/* start must be same */
-	if (WARN_ONCE(cb->seq != cb1->seq, "master seq %u slaver seq %u",
+	if (WARN_ONCE(cb->seq != cb1->seq, "DO checkpoint, reason: master seq %u slaver seq %u",
 		      cb->seq, cb1->seq))
 		return false;
 
@@ -539,14 +539,14 @@ static bool colo_compare_tcp_skb(struct sk_buff *skb,
 		cb->seq_end -= 1;
 	} else if (cb1->fin && !cb->fin) {
 		if (!after(cb1->seq_end, cb->seq_end)) {
-			pr_dbg("slaver fin packet seq is %u while master packet seq %u\n",
+			pr_err("DO checkpoint: reason: slaver fin packet seq is %u while master packet seq %u\n",
 				cb1->seq_end, cb->seq_end);
 			return false;
 		}
 		cb1->seq_end -= 1;
 	} else if (!cb1->fin && cb->fin) {
 		if (!after(cb->seq_end, cb1->seq_end)) {
-			pr_dbg("master fin packet seq is %u while slaver packet seq %u\n",
+			pr_err("DO checkpoint: reason: master fin packet seq is %u while slaver packet seq %u\n",
 				cb->seq_end, cb1->seq_end);
 			return false;
 		}
@@ -559,8 +559,10 @@ compare:
 		u32 len = cb->seq_end - cb->seq;
 		u32 seq_end = cb->seq_end;
 
-		if (!colo_compare_skb(skb, skb1, cb->dataoff, cb1->dataoff, len))
+		if (!colo_compare_skb(skb, skb1, cb->dataoff, cb1->dataoff, len)) {
+			pr_err("DO checkpoint: reason: payload is not consisted(if)\n");
 			return false;
+		}
 
 		/* data is consist */
 		/* restore fin packet, get ready for next round */
@@ -593,8 +595,10 @@ compare:
 	} else {
 		u32 len = cb1->seq_end - cb1->seq;
 
-		if (!colo_compare_skb(skb, skb1, cb->dataoff, cb1->dataoff, len))
+		if (!colo_compare_skb(skb, skb1, cb->dataoff, cb1->dataoff, len)) {
+			pr_err("DO checkpoint: reason: payload is not consisted(else)\n");
 			return false;
+		}
 
 		/* master packet is longer than skaver packet, compare the
 		 * same part, and move the seq & dataoff */
