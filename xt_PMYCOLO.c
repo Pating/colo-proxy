@@ -52,10 +52,15 @@ static struct forward_device forward_device_head = {
 };
 DEFINE_MUTEX(forward_device_lock);
 
+#if 0
 #define nf_conntrack_get__(nfct) { printk("%s,%d: before get nfct %p reference %u\n", __func__, __LINE__, nfct, atomic_read(&nfct->use)); \
 								nf_conntrack_get(nfct); }
 #define nf_conntrack_put__(nfct) { printk("%s,%d: before put nfct %p reference %u\n", __func__, __LINE__, nfct, atomic_read(&nfct->use)); \
 								nf_conntrack_put(nfct); }
+#else
+#define nf_conntrack_get__(nfct) nf_conntrack_get(nfct)
+#define nf_conntrack_put__(nfct) nf_conntrack_put(nfct)
+#endif
 
 static bool colo_compare_skb(struct sk_buff *skb,
 			     struct sk_buff *skb1,
@@ -1324,7 +1329,7 @@ static int primary_do_checkpoint(struct colo_node *node)
 		                         struct nf_conn_colo,
 		                         conn_list);
 
-		nf_conntrack_get__ (conn->nfct);
+		//nf_conntrack_get__ (conn->nfct);
 		list_move_tail (&conn->conn_list, &node->wait_list);
 		spin_unlock_bh (&node->lock);
 
@@ -1341,7 +1346,7 @@ static int primary_do_checkpoint(struct colo_node *node)
 			colo_other_do_checkpoint (conn);
 		}
 		spin_unlock (&conn->chk_lock);
-		nf_conntrack_put__ (conn->nfct);
+		//nf_conntrack_put__ (conn->nfct);
 
 		spin_lock_bh (&node->lock);
 	}
