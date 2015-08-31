@@ -42,6 +42,7 @@ union nf_conn_colo_tcp {
 };
 
 struct nf_conn_colo {
+	struct rcu_head rcu;
 	struct list_head	conn_list;
 	struct list_head	entry_list;
 	struct sk_buff_head	slaver_pkt_queue;
@@ -55,7 +56,7 @@ struct nf_conn_colo {
 };
 
 struct nf_ct_ext_colo {
-    struct nf_conn_colo *conn;
+	struct nf_conn_colo *conn;
 };
 
 static inline
