@@ -654,6 +654,7 @@ static int kcolo_thread(void *dummy)
 		list_move_tail(&conn->conn_list, &node->wait_list);
 
 		spin_unlock_bh(&node->lock);
+		rcu_read_lock();
 
 		// get reference, the last nf_reinject may trigger conntrack destruction.
 		nf_conntrack_get__(conn->nfct);
@@ -669,6 +670,8 @@ static int kcolo_thread(void *dummy)
 		}
 		// release the reference, this conntrack can go now
 		nf_conntrack_put__(conn->nfct);
+
+		rcu_read_unlock();
 	}
 
 	pr_dbg("kcolo_thread %d exit\n", node->vm_pid);
@@ -833,9 +836,11 @@ static int colo_enqueue_packet(struct nf_queue_entry *entry, unsigned int ptr)
 
 	ct = nf_ct_get(skb, &ctinfo);
 
+	rcu_read_lock();
 	conn = nfct_colo(ct);
 
 	if (conn == NULL) {
+		rcu_read_unlock();
 		pr_dbg("colo_enqueue_packet colo isn't exist\n");
 		return -1;
 	}
@@ -849,12 +854,14 @@ static int colo_enqueue_packet(struct nf_queue_entry *entry, unsigned int ptr)
 #else
 	if (entry->hook != NF_INET_PRE_ROUTING) {
 #endif
+		rcu_read_unlock();
 		pr_dbg("packet is not on pre routing chain\n");
 		return -1;
 	}
 
 	node = colo_node_get(conn->vm_pid);
 	if (!node) {
+		rcu_read_unlock();
 		pr_dbg("%s: Could not find node: %d\n",__func__, conn->vm_pid);
 		nf_reinject(entry, NF_STOP);
 		return 0;
@@ -897,6 +904,7 @@ static int colo_enqueue_packet(struct nf_queue_entry *entry, unsigned int ptr)
 	spin_unlock_bh(&conn->lock);
 
 	if (ret < 0) {
+		rcu_read_unlock();
 		colo_node_put(node);
 		return ret;
 	}
@@ -905,6 +913,8 @@ static int colo_enqueue_packet(struct nf_queue_entry *entry, unsigned int ptr)
 	list_move_tail(&conn->conn_list, &node->conn_list);
 	wake_up_interruptible(&node->u.p.wait);
 	spin_unlock_bh(&node->lock);
+
+	rcu_read_unlock();
 
 	colo_node_put(node);
 

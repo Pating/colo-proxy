@@ -220,9 +220,9 @@ static void nf_ct_colo_extend_destroy(struct nf_conn *ct)
 	spin_lock_bh(&node->lock);
 	list_del_init(&conn->conn_list);
 	spin_unlock_bh(&node->lock);
-	kfree(conn);
 	colo = __nfct_colo(ct);
 	colo->conn = NULL;
+	kfree_rcu(conn, rcu);
 out:
 	colo_node_put(node);
 }
