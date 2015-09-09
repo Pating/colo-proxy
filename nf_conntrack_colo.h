@@ -33,6 +33,8 @@ union nf_conn_colo_tcp {
 		u32			compared_seq;
 		u32			master_snd_nxt;
 		u32			slaver_snd_nxt;
+
+		u32			ssack;
 	} p;
 
 	struct {
