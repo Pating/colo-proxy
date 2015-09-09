@@ -136,7 +136,7 @@ __colo_compare_common(struct colo_primary *colo,
 				      u32 *, u32, u32, u32, u8 *),
 		      bool (*pre_compare)(struct nf_conn_colo *,
 					  struct nf_queue_entry *,
-					  u32 *, u32))
+					  u32 *, u32, u32 *))
 {
 	struct nf_queue_entry *e, *n;
 	LIST_HEAD(master_head);
@@ -145,7 +145,7 @@ __colo_compare_common(struct colo_primary *colo,
 	bool sort = false;
 	bool checkpoint = false;
 	union nf_conn_colo_tcp *p = NULL;
-	u32 max_ack = 0, compared_seq;
+	u32 max_ack = 0, compared_seq, retrans = 0;
 	u32 swin = 0; u16 mscale = 1;
 	u8 free, times = 0;
 
@@ -226,9 +226,15 @@ restart:
 			goto restart;
 		}
 		/* ugly, entry is freed & handled by pre_compare */
-		if (pre_compare && pre_compare(conn, e, &compared_seq, max_ack))
+		if (pre_compare && pre_compare(conn, e, &compared_seq, max_ack, &retrans) &&
+			retrans < 3)
 			continue;
 
+		if (unlikely(retrans >= 3)) {
+			checkpoint = true;
+			pr_dbg("retrans %u exceed 3, do checkpoint\n", retrans);
+			break;
+		}
 next:
 		if (skb == NULL) {
 			struct nf_conn *ct = (struct nf_conn *) conn->nfct;
@@ -401,12 +407,13 @@ static void colo_compare_udp(struct colo_primary *colo,
 static bool colo_pre_compare_tcp_skb(struct nf_conn_colo *conn,
 				     struct nf_queue_entry *e,
 				     u32 *compared_seq,
-				     u32 max_ack)
+				     u32 max_ack, u32 *retrans)
 {
 	struct sk_buff *skb = e->skb;
 	struct colo_tcp_cb *cb = COLO_SKB_CB(skb);
 	union nf_conn_colo_tcp *p = &conn->proto;
 	u32 win = cb->win << p->p.mscale;
+	u32 ssack = p->p.ssack;
 
 	pr_dbg("master skb seq %u, end %u, ack %u, max ack %u, compared_seq %u, win %u, slaver win %u\n",
 		cb->seq, cb->seq_end, cb->ack, max_ack, *compared_seq, win, p->p.swin);
@@ -424,8 +431,11 @@ static bool colo_pre_compare_tcp_skb(struct nf_conn_colo *conn,
 		return false;
 	} else if (!after(cb->seq_end, *compared_seq)) {
 		if(after(cb->ack, max_ack)) {
-			pr_dbg("%u wait for slaver's ack %u\n",
-				cb->ack, max_ack);
+			pr_dbg("%u wait for slaver's ack %u, slave sack %u\n",
+				cb->ack, max_ack, ssack);
+			if (ssack && before(ssack, cb->ack)) {
+				*retrans = *retrans + 2;
+			}
 			return true;
 		}
 
@@ -435,6 +445,7 @@ static bool colo_pre_compare_tcp_skb(struct nf_conn_colo *conn,
 
 			if (!new_win) {
 				pr_dbg("slaver send zero window packet, help slaver, do checkpoint\n");
+				*retrans += 6;
 				return false;
 			}
 
@@ -733,7 +744,7 @@ static int colo_enqueue_tcp_packet(struct nf_conn_colo *conn,
 	cb = COLO_SKB_CB(skb);
 
 	th = colo_get_tcphdr(nf_ct_l3num((struct nf_conn*) conn->nfct),
-			     skb, cb, &proto->p.mscale);
+			     skb, cb, &proto->p.mscale, NULL);
 
 	if (th == NULL)
 		return -1;
@@ -978,22 +989,26 @@ colo_slaver_enqueue_tcp_packet(struct nf_conn_colo *conn,
 	cb = COLO_SKB_CB(skb);
 
 	th = colo_get_tcphdr(nf_ct_l3num((struct nf_conn *) conn->nfct),
-			     skb, cb, &proto->p.sscale);
+			     skb, cb, &proto->p.sscale, &proto->p.ssack);
 
 	if (th == NULL) {
 		pr_dbg("get tcphdr of slaver packet failed\n");
 		return NF_DROP;
 	}
 
-	pr_dbg("DEBUG: slaver: conn %p enqueue skb seq %u, seq_end %u, ack %u, sack %u, LEN: %u\n",
-		conn, cb->seq, cb->seq_end, cb->ack, proto->p.sack, cb->seq_end - cb->seq);
+	pr_dbg("DEBUG: slaver: conn %p enqueue skb seq %u, seq_end %u, ack %u, sack %u, s[sack] %u, LEN: %u\n",
+		conn, cb->seq, cb->seq_end, cb->ack, proto->p.sack, proto->p.ssack, cb->seq_end - cb->seq);
 
 	if (before(proto->p.sack, cb->ack)) {
 		proto->p.sack = cb->ack;
 		stolen = true;
 	}
 
-	pr_dbg("slaver max ack %u, rcv_nxt is %u\n", proto->p.sack, proto->p.srcv_nxt);
+	if (proto->p.ssack && before(proto->p.ssack, proto->p.sack)) {
+		proto->p.ssack = 0;
+	}
+
+	pr_dbg("slaver max ack %u, rcv_nxt is %u, s[sack] %u\n", proto->p.sack, proto->p.srcv_nxt, proto->p.ssack);
 
 	win = cb->win << proto->p.sscale;
 	if (th->syn) {
@@ -1308,6 +1323,7 @@ static void colo_tcp_do_checkpoint(struct nf_conn_colo *conn)
 	__skb_queue_purge(&conn->slaver_pkt_queue);
 	proto->p.srcv_nxt = proto->p.mrcv_nxt;
 	proto->p.sack = proto->p.mack;
+	proto->p.ssack = 0;
 	proto->p.sscale = proto->p.mscale;
 
 	spin_unlock_bh(&conn->slaver_pkt_queue.lock);
