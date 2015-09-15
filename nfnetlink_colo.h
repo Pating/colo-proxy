@@ -45,9 +45,4 @@ enum nfnl_colo_kernel_notify_attributes {
 int colo_send_checkpoint_req(struct colo_primary *colo);
 struct colo_node *colo_node_get(u32 vm_pid);
 void colo_node_put(struct colo_node *node);
-static inline void colo_node_destroy(struct colo_node *node) {
-    /* Do something else ? */
-    colo_node_put(node);
-}
-
 #endif

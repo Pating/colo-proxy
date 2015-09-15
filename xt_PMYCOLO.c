@@ -1393,7 +1393,7 @@ static void colo_setup_checkpoint_by_id(u32 id) {
 			id, node);
 		colo_send_checkpoint_req(&node->u.p);
 	}
-        colo_node_put(node);
+	colo_node_put(node);
 }
 
 static void colo_primary_cleanup_conn(struct nf_conn_colo *conn)
@@ -1414,9 +1414,36 @@ static void colo_primary_cleanup_conn(struct nf_conn_colo *conn)
 	spin_unlock_bh(&conn->lock);
 }
 
+void static colo_release_all_conn(struct colo_node *node)
+{
+	struct nf_conn_colo *conn;
+
+	for (;;) {
+		spin_lock_bh(&node->lock);
+
+		list_splice_init(&node->wait_list, &node->conn_list);
+
+		if (!list_empty(&node->conn_list)) {
+			conn = list_first_entry(&node->conn_list,
+						struct nf_conn_colo,
+						conn_list);
+
+//			nf_conntrack_get__(conn->nfct);
+			list_del_init(&conn->conn_list);
+			spin_unlock_bh(&node->lock);
+		} else {
+			spin_unlock_bh(&node->lock);
+			return;
+		}
+
+		colo_primary_cleanup_conn(conn);
+
+//		nf_conntrack_put__(conn->nfct);
+	}
+}
+
 static void colo_primary_destroy_node(struct colo_node *node)
 {
-	struct nf_conn_colo *conn = NULL;
 	struct task_struct *task;
 
 	spin_lock_bh(&node->lock);
@@ -1428,30 +1455,9 @@ static void colo_primary_destroy_node(struct colo_node *node)
 
 	if (task)
 		kthread_stop(task);
-next:
-	spin_lock_bh(&node->lock);
 
-	list_splice_init(&node->wait_list, &node->conn_list);
-
-	if (!list_empty(&node->conn_list)) {
-		conn = list_first_entry(&node->conn_list,
-					struct nf_conn_colo,
-					conn_list);
-
-//		nf_conntrack_get__(conn->nfct);
-		list_del_init(&conn->conn_list);
-		spin_unlock_bh(&node->lock);
-	} else {
-		spin_unlock_bh(&node->lock);
-		module_put(THIS_MODULE);
-		return;
-	}
-
-	colo_primary_cleanup_conn(conn);
-
-//	nf_conntrack_put__(conn->nfct);
-
-	goto next;
+	colo_release_all_conn(node);
+	module_put(THIS_MODULE);
 }
 
 static void colo_primary_destroy(struct colo_node *node)
@@ -1630,6 +1636,7 @@ static void colo_primary_tg_destroy(const struct xt_tgdtor_param *par)
 
 	node = container_of(info->colo, struct colo_node, u.p);
 	cleanup_forward_netdev(info->forward_dev);
+	colo_release_all_conn(node);
 	colo_node_put(node);
 }
 
