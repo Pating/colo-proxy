@@ -63,17 +63,15 @@ static void colo_node_destroy_fn(struct work_struct *work)
 	pr_dbg("%s: destroy node:%d and kcolo:%d thread\n", __func__, node->vm_pid, node->vm_pid);
 	if (node->destroy_notify_cb)
 		node->destroy_notify_cb(node);
-	kfree(node);
+	colo_node_put(node);
 }
 
 /* call_rcu callback function, it should never do work that leading to sleep. */
-static void
-colo_node_destroy_rcu(struct rcu_head *head)
+
+static void colo_free_node(struct rcu_head *head)
 {
 	struct colo_node *node = container_of(head, struct colo_node, rcu);
-
-	INIT_WORK(&node->destroy_work, colo_node_destroy_fn);
-	schedule_work(&node->destroy_work);
+	kfree(node);
 }
 
 /* In atomic_notifier callback, never do work that leading to sleep or schedule. */
@@ -82,8 +80,8 @@ static void colo_node_release(struct kref *kref)
 	struct colo_node *node = container_of(kref, struct colo_node, refcnt);
 
 	pr_dbg("%s, destroy node:%d\n", __func__, node->vm_pid);
-	list_del_rcu (&node->list);
-	call_rcu(&node->rcu, colo_node_destroy_rcu);
+	list_del_rcu(&node->list);
+	call_rcu(&node->rcu, colo_free_node);
 }
 
 void colo_node_put(struct colo_node *node)
@@ -91,8 +89,15 @@ void colo_node_put(struct colo_node *node)
 	if (node)
 		kref_put(&node->refcnt, colo_node_release);
 }
-
 EXPORT_SYMBOL_GPL(colo_node_put);
+
+static void colo_node_destroy(struct colo_node *node)
+{
+	colo_node_get(node->vm_pid); // we put node at destroy work function
+	INIT_WORK(&node->destroy_work, colo_node_destroy_fn);
+	schedule_work(&node->destroy_work);
+	colo_node_put(node);
+}
 
 static const struct nla_policy nfnl_colo_policy[NFNL_COLO_MAX + 1] = {
 	[NFNL_COLO_MODE]   = { .type = NLA_U8 },
