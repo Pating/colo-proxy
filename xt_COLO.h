@@ -46,6 +46,7 @@ struct colo_primary {
 	struct task_struct	*task;
 	wait_queue_head_t	wait;
 	bool			checkpoint;
+	int		status;
 };
 
 struct colo_secondary {
@@ -74,6 +75,12 @@ struct colo_node {
 	} u;
 
 	struct kref   	refcnt; /* Protect colo_node struct */
+};
+
+enum {
+	COLO_TG_NONE = 0,
+	COLO_TG_RUNNING,
+	COLO_TG_DESTROYED,
 };
 
 /* MUST small than 48 - sizeof (struct inet_skb_parm) */
