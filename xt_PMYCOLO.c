@@ -633,6 +633,8 @@ static void colo_compare_tcp(struct colo_primary *colo,
 				     colo_pre_compare_tcp_skb);
 }
 
+void static colo_release_all_conn(struct colo_node *node);
+
 static int kcolo_thread(void *dummy)
 {
 	struct colo_primary *colo = dummy;
@@ -926,6 +928,9 @@ static int colo_enqueue_packet(struct nf_queue_entry *entry, unsigned int ptr)
 	spin_unlock_bh(&node->lock);
 
 	rcu_read_unlock();
+
+	if (node->u.p.status == COLO_TG_DESTROYED)
+		colo_release_all_conn(node);
 
 	colo_node_put(node);
 
@@ -1237,6 +1242,10 @@ colo_slaver_queue_hook(const struct nf_hook_ops *ops, struct sk_buff *skb,
 	list_move_tail(&conn->conn_list, &node->conn_list);
 	wake_up_interruptible(&node->u.p.wait);
 	spin_unlock_bh(&node->lock);
+
+	if (node->u.p.status == COLO_TG_DESTROYED)
+		colo_release_all_conn(node);
+
 out:
 	colo_node_put(node);
 out_unlock:
@@ -1451,6 +1460,7 @@ static void colo_primary_destroy_node(struct colo_node *node)
 	task = node->u.p.task;
 	if (task)
 		node->u.p.task = NULL;
+	node->u.p.status = COLO_TG_DESTROYED;
 	spin_unlock_bh(&node->lock);
 
 	if (task)
@@ -1595,7 +1605,7 @@ static int colo_primary_tg_check(const struct xt_tgchk_param *par)
 	}
 	colo = &node->u.p;
 
-	if (colo->task) {
+	if (colo->status != COLO_TG_NONE) {
 		pr_dbg("node %d already been initialized\n", info->index);
 		/* already initialized by other rules */
 		goto out;
@@ -1615,6 +1625,7 @@ static int colo_primary_tg_check(const struct xt_tgchk_param *par)
 	/* init primary info */
 
 	spin_lock_bh(&node->lock);
+	colo->status = COLO_TG_RUNNING;
 	node->destroy_notify_cb = colo_primary_destroy;
 	node->do_checkpoint_cb = primary_do_checkpoint;
 	spin_unlock_bh(&node->lock);
@@ -1636,7 +1647,8 @@ static void colo_primary_tg_destroy(const struct xt_tgdtor_param *par)
 
 	node = container_of(info->colo, struct colo_node, u.p);
 	cleanup_forward_netdev(info->forward_dev);
-	colo_release_all_conn(node);
+	if (node->u.p.status == COLO_TG_DESTROYED)
+		colo_release_all_conn(node);
 	colo_node_put(node);
 }
 
