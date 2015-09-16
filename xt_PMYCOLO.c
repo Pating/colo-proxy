@@ -52,16 +52,6 @@ static struct forward_device forward_device_head = {
 };
 DEFINE_MUTEX(forward_device_lock);
 
-#if 0
-#define nf_conntrack_get__(nfct) { printk("%s,%d: before get nfct %p reference %u\n", __func__, __LINE__, nfct, atomic_read(&nfct->use)); \
-								nf_conntrack_get(nfct); }
-#define nf_conntrack_put__(nfct) { printk("%s,%d: before put nfct %p reference %u\n", __func__, __LINE__, nfct, atomic_read(&nfct->use)); \
-								nf_conntrack_put(nfct); }
-#else
-#define nf_conntrack_get__(nfct) nf_conntrack_get(nfct)
-#define nf_conntrack_put__(nfct) nf_conntrack_put(nfct)
-#endif
-
 static bool colo_compare_skb(struct sk_buff *skb,
 			     struct sk_buff *skb1,
 			     u32 dataoff, u32 dataoff1,
@@ -670,7 +660,7 @@ static int kcolo_thread(void *dummy)
 		rcu_read_lock();
 
 		// get reference, the last nf_reinject may trigger conntrack destruction.
-		nf_conntrack_get__(conn->nfct);
+		nf_conntrack_get(conn->nfct);
 
 		if (nf_ct_protonum((struct nf_conn *)conn->nfct) == IPPROTO_TCP) {
 			colo_compare_tcp(colo, conn);
@@ -682,7 +672,7 @@ static int kcolo_thread(void *dummy)
 			colo_compare_other(colo, conn);
 		}
 		// release the reference, this conntrack can go now
-		nf_conntrack_put__(conn->nfct);
+		nf_conntrack_put(conn->nfct);
 
 		rcu_read_unlock();
 	}
@@ -1205,7 +1195,7 @@ colo_slaver_queue_hook(const struct nf_hook_ops *ops, struct sk_buff *skb,
 		return NF_ACCEPT;
 
 	/* after defrage */
-	nf_conntrack_put__(skb->nfct);
+	nf_conntrack_put(skb->nfct);
 	skb->nfct = NULL;
 
 	rcu_read_lock();
@@ -1271,7 +1261,7 @@ colo_slaver_arp_hook(const struct nf_hook_ops *ops, struct sk_buff *skb,
 
 	pr_dbg("get slaver's arp packet\n");
 
-	nf_conntrack_put__(skb->nfct);
+	nf_conntrack_put(skb->nfct);
 	skb->nfct = NULL;
 
 	arp = arp_hdr(skb);
@@ -1368,7 +1358,6 @@ static int primary_do_checkpoint(struct colo_node *node)
 		                         struct nf_conn_colo,
 		                         conn_list);
 
-		//nf_conntrack_get__ (conn->nfct);
 		list_move_tail (&conn->conn_list, &node->wait_list);
 		spin_unlock_bh (&node->lock);
 
@@ -1385,7 +1374,6 @@ static int primary_do_checkpoint(struct colo_node *node)
 			colo_other_do_checkpoint (conn);
 		}
 		spin_unlock (&conn->chk_lock);
-		//nf_conntrack_put__ (conn->nfct);
 
 		spin_lock_bh (&node->lock);
 	}
@@ -1436,8 +1424,6 @@ void static colo_release_all_conn(struct colo_node *node)
 			conn = list_first_entry(&node->conn_list,
 						struct nf_conn_colo,
 						conn_list);
-
-//			nf_conntrack_get__(conn->nfct);
 			list_del_init(&conn->conn_list);
 			spin_unlock_bh(&node->lock);
 		} else {
@@ -1446,8 +1432,6 @@ void static colo_release_all_conn(struct colo_node *node)
 		}
 
 		colo_primary_cleanup_conn(conn);
-
-//		nf_conntrack_put__(conn->nfct);
 	}
 }
 
@@ -1486,7 +1470,7 @@ static int slaver_nic_rcv(struct sk_buff *skb, struct net_device *dev,
 	/* make skb belongs to slaver conn, for defrage */
 	skb->nfct = &nf_ct_slaver_get()->ct_general;
 	skb->nfctinfo = IP_CT_NEW;
-	nf_conntrack_get__(skb->nfct);
+	nf_conntrack_get(skb->nfct);
 
 out:
 	kfree_skb(skb);
