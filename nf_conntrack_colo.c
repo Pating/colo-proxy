@@ -31,7 +31,7 @@ static void nfct_init_colo(struct nf_conn_colo *conn,
 	union nf_conn_colo_tcp *proto = NULL;
 
 	if (nf_ct_protonum((struct nf_conn *)conn->nfct) == IPPROTO_TCP) {
-		proto = (union nf_conn_colo_tcp *) conn->proto;
+		proto = &conn->proto;
 
 		memset(proto, 0, sizeof(*proto));
 
@@ -60,13 +60,16 @@ static void nfct_init_colo(struct nf_conn_colo *conn,
 	spin_lock_init(&conn->chk_lock);
 	conn->flags |= flag;
 	conn->vm_pid = vm_pid;
+	conn->init = true;
+	smp_wmb();
+
 }
 
 static
 struct nf_conn_colo *nfct_create_colo(struct nf_conn *ct, u32 vm_pid, u32 flag)
 {
+	struct nf_ct_ext_colo *colo = NULL;
 	struct nf_conn_colo *conn = NULL;
-	size_t length = 0;
 
 	if (nf_ct_is_confirmed(ct)) {
 		pr_dbg("conntrack %p is confirmed!\n", ct);
@@ -74,24 +77,30 @@ struct nf_conn_colo *nfct_create_colo(struct nf_conn *ct, u32 vm_pid, u32 flag)
 	}
 
 	if (nf_ct_protonum(ct) == IPPROTO_TCP) {
-		length = sizeof(union nf_conn_colo_tcp);
-
 		if (flag & COLO_CONN_SECONDARY) {
 			/* seq adjust is only meaningful for TCP conn */
 			if (!nfct_seqadj_ext_add(ct)) {
-				pr_dbg("failed to add SEQADJ extension\n");
+				pr_err("failed to add SEQADJ extension\n");
+				return NULL;
 			}
 		}
 	}
 
-	conn = (struct nf_conn_colo *) nf_ct_ext_add_length(ct, NF_CT_EXT_COLO,
-							    length, GFP_ATOMIC);
-	if (!conn) {
-		pr_dbg("add extend failed\n");
+	colo = (struct nf_ct_ext_colo *) nf_ct_ext_add(ct, NF_CT_EXT_COLO,
+							    GFP_ATOMIC);
+	if (!colo) {
+		pr_err("add colo extend failed\n");
 		return NULL;
 	}
 
+	conn = kzalloc(sizeof(*conn), GFP_ATOMIC);
+	if (!conn) {
+		pr_err("can not malloc conn\n");
+		return NULL;
+	}
 	conn->nfct = &ct->ct_general;
+	conn->init = false;
+	colo->conn = conn;
 
 	return conn;
 }
@@ -113,7 +122,7 @@ nf_ct_colo_get(struct sk_buff *skb, struct colo_node *node, u32 flag)
 	if (colo_conn == NULL) {
 		colo_conn = nfct_create_colo(ct, node->vm_pid, flag);
 		if (colo_conn == NULL) {
-			pr_dbg("create colo conn failed!\n");
+			pr_err("create colo conn failed!\n");
 			return NULL;
 		}
 
@@ -128,13 +137,19 @@ EXPORT_SYMBOL_GPL(nf_ct_colo_get);
 
 static void nf_ct_colo_extend_move(void *new, void *old)
 {
-	struct nf_conn_colo *new_conn = new;
-	struct nf_conn_colo *old_conn = old;
+	struct nf_ct_ext_colo *new_colo = new, *old_colo = old;
+	struct nf_conn_colo *new_conn = kzalloc(sizeof(*new_conn), GFP_ATOMIC);
+	struct nf_conn_colo *old_conn = old_colo->conn;
 	struct colo_node *node;
 	unsigned long flags;
 
 	pr_dbg("nf_ct_colo_extend_move new %p, old %p\n", new, old);
-
+	new_colo->conn = new_conn;
+	if (!new_conn) {
+		pr_err("can not malloc new conn\n");
+		BUG_ON(1);
+		return;
+	}
 	node = colo_node_get(old_conn->vm_pid);
 
 	if (WARN_ONCE(node == NULL, "Can not find node whose index %d!\n",
@@ -159,9 +174,12 @@ static void nf_ct_colo_extend_move(void *new, void *old)
 	if (nf_ct_protonum((struct nf_conn *)old_conn->nfct) == IPPROTO_TCP) {
 		union nf_conn_colo_tcp *old_proto, *new_proto;
 
-		old_proto = (union nf_conn_colo_tcp *) old_conn->proto;
-		new_proto = (union nf_conn_colo_tcp *) new_conn->proto;
+		old_proto = &old_conn->proto;
+		new_proto = &new_conn->proto;
+		memcpy(new_proto, old_proto, sizeof(*old_proto));
+	}
 
+#if 0
 		if (old_conn->flags | COLO_CONN_SECONDARY) {
 			new_proto->s.sec_isn = old_proto->s.sec_isn;
 			new_proto->s.pri_isn = old_proto->s.pri_isn;
@@ -169,6 +187,7 @@ static void nf_ct_colo_extend_move(void *new, void *old)
 		}
 	}
 out:
+#endif
 	new_conn->vm_pid = old_conn->vm_pid;
 	new_conn->nfct = old_conn->nfct;
 
@@ -177,35 +196,41 @@ out:
 	if (!list_empty(&old_conn->conn_list))
 		list_replace(&old_conn->conn_list, &new_conn->conn_list);
 	spin_unlock_bh(&node->lock);
+	kfree(old_conn);
+	old_colo->conn = NULL;
 	colo_node_put(node);
 }
 
 static void nf_ct_colo_extend_destroy(struct nf_conn *ct)
 {
+	struct nf_ct_ext_colo *colo;
 	struct nf_conn_colo *conn;
 	struct colo_node *node;
 
 	conn = nfct_colo(ct);
 	if (conn == NULL)
 		return;
+	conn->init = false;
+	smp_wmb();
 
 	node = colo_node_get(conn->vm_pid);
 	if (node == NULL)
-		goto out;
+		return;
 
 	spin_lock_bh(&node->lock);
 	list_del_init(&conn->conn_list);
 	spin_unlock_bh(&node->lock);
-
-out:
+	colo = __nfct_colo(ct);
+	colo->conn = NULL;
+	kfree_rcu(conn, rcu);
 	colo_node_put(node);
 }
 
 static struct nf_ct_ext_type nf_ct_colo_extend __read_mostly = {
-	.len		= sizeof(struct nf_conn_colo),
+	.len		= sizeof(struct nf_ct_ext_colo),
 	.move		= nf_ct_colo_extend_move,
 	.destroy	= nf_ct_colo_extend_destroy,
-	.align		= __alignof__(struct nf_conn_colo),
+	.align		= __alignof__(struct nf_ct_ext_colo),
 	.id		= NF_CT_EXT_COLO,
 };
 

@@ -63,17 +63,15 @@ static void colo_node_destroy_fn(struct work_struct *work)
 	pr_dbg("%s: destroy node:%d and kcolo:%d thread\n", __func__, node->vm_pid, node->vm_pid);
 	if (node->destroy_notify_cb)
 		node->destroy_notify_cb(node);
-	kfree(node);
+	colo_node_put(node);
 }
 
 /* call_rcu callback function, it should never do work that leading to sleep. */
-static void
-colo_node_destroy_rcu(struct rcu_head *head)
+
+static void colo_free_node(struct rcu_head *head)
 {
 	struct colo_node *node = container_of(head, struct colo_node, rcu);
-
-	INIT_WORK(&node->destroy_work, colo_node_destroy_fn);
-	schedule_work(&node->destroy_work);
+	kfree(node);
 }
 
 /* In atomic_notifier callback, never do work that leading to sleep or schedule. */
@@ -82,8 +80,8 @@ static void colo_node_release(struct kref *kref)
 	struct colo_node *node = container_of(kref, struct colo_node, refcnt);
 
 	pr_dbg("%s, destroy node:%d\n", __func__, node->vm_pid);
-	list_del_rcu (&node->list);
-	call_rcu(&node->rcu, colo_node_destroy_rcu);
+	list_del_rcu(&node->list);
+	call_rcu(&node->rcu, colo_free_node);
 }
 
 void colo_node_put(struct colo_node *node)
@@ -91,8 +89,15 @@ void colo_node_put(struct colo_node *node)
 	if (node)
 		kref_put(&node->refcnt, colo_node_release);
 }
-
 EXPORT_SYMBOL_GPL(colo_node_put);
+
+static void colo_node_destroy(struct colo_node *node)
+{
+	colo_node_get(node->vm_pid); // we put node at destroy work function
+	INIT_WORK(&node->destroy_work, colo_node_destroy_fn);
+	schedule_work(&node->destroy_work);
+	colo_node_put(node);
+}
 
 static const struct nla_policy nfnl_colo_policy[NFNL_COLO_MAX + 1] = {
 	[NFNL_COLO_MODE]   = { .type = NLA_U8 },
@@ -110,14 +115,14 @@ static int colo_init_proxy(struct sock *nl, struct sk_buff *skb,
 	}
 	mode = nla_get_u8(cda[NFNL_COLO_MODE]);
 	if (mode >= COLO_MODE_MAX) {
-		printk(KERN_ERR "colo mode only can be 1 or 2\n");
+		pr_err("colo mode only can be 1 or 2\n");
 		return -EINVAL;
 	}
 	rcu_read_lock();
 	node = colo_find_node(nlh->nlmsg_pid);
 	if (node) {
 		rcu_read_unlock();
-		pr_dbg("node %d exist\n", nlh->nlmsg_pid);
+		pr_err("node %d exist\n", nlh->nlmsg_pid);
 		return -EEXIST;
 	}
 	rcu_read_unlock();
@@ -159,13 +164,13 @@ static int colo_do_checkpoint(struct sock *nl, struct sk_buff *skb,
 
 	mode = nla_get_u8(cda[NFNL_COLO_MODE]);
 	if (mode >= COLO_MODE_MAX) {
-		printk(KERN_ERR "mode only can be 1 or 2\n");
+		pr_err("mode only can be 1 or 2\n");
 		return -EINVAL;
 	}
 
 	node = colo_node_get(nlh->nlmsg_pid);
 	if (!node) {
-		printk(KERN_ERR "Do checkpoint: node %d not exist\n", nlh->nlmsg_pid);
+		pr_err("Do checkpoint: node %d not exist\n", nlh->nlmsg_pid);
 		return -EEXIST;
 	}
 
@@ -189,22 +194,24 @@ static int colo_do_failover(struct sock *nl, struct sk_buff *skb,
 	}
 	mode = nla_get_u8 (cda[NFNL_COLO_MODE]);
 	if (mode >= COLO_MODE_MAX) {
+		pr_err("mode only can be 1 or 2\n");
 		return -EINVAL;
 	}
 
 	node = colo_node_get(nlh->nlmsg_pid);
 	if (!node) {
+		pr_err("Node %d not exist\n", nlh->nlmsg_pid);
 		return -EEXIST;
 	}
 
 	if (mode == COLO_SECONDARY_MODE) {
 		node->u.s.failover = true;
 	} else {
-	     colo_node_put(node);
-	     /* For PVM, if failover happens, should do some clean work? */
-            return -EINVAL;
-        }
-        colo_node_put(node);
+		colo_node_put(node);
+		/* For PVM, if failover happens, should do some clean work? */
+		return -EINVAL;
+	}
+	colo_node_put(node);
 	return 0;
 }
 
@@ -220,12 +227,13 @@ static int colo_reset_proxy(struct sock *nl, struct sk_buff *skb,
 	}
 	mode = nla_get_u8 (cda[NFNL_COLO_MODE]);
 	if (mode >= COLO_MODE_MAX) {
+		pr_err("mode only can be 1 or 2\n");
 		return -EINVAL;
 	}
 
 	node = colo_node_get (nlh->nlmsg_pid);
 	if (!node) {
-		printk(KERN_ERR "Node %d not exist\n", nlh->nlmsg_pid);
+		pr_err("Node %d not exist\n", nlh->nlmsg_pid);
 		return -EEXIST;
 	}
 
@@ -269,8 +277,10 @@ int colo_send_checkpoint_req(struct colo_primary *colo)
 	skb = nfnetlink_alloc_skb(&init_net,
 				nlmsg_total_size(sizeof(struct nfgenmsg)) +
 				nla_total_size(sizeof(int32_t)), portid, GFP_ATOMIC);
-	if (skb == NULL)
+	if (skb == NULL) {
+		pr_err("nfnetlink_alloc_skb failed\n");
 		return -ENOMEM;
+	}
 
 	nlh = nlmsg_put(skb, portid, 0, NFNL_SUBSYS_COLO << 8 | NFCOLO_KERNEL_NOTIFY,
 					sizeof(struct nfgenmsg), 0);
@@ -346,7 +356,7 @@ static int __init nfnetlink_colo_init(void)
 		pr_err("log: failed to create netlink socket\n");
 		goto cleanup_netlink_notifier;
 	}
-        return status;
+	return status;
 
 cleanup_netlink_notifier:
 	netlink_unregister_notifier(&colonl_notifier);

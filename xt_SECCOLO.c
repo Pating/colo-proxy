@@ -52,9 +52,9 @@ colo_secondary_hook(const struct nf_hook_ops *ops, struct sk_buff *skb,
 	    (conn->flags & COLO_CONN_BYPASS))
 		return NF_STOP;
 
-	proto = (union nf_conn_colo_tcp *) conn->proto;
+	proto = &conn->proto;
 
-	th = colo_get_tcphdr(ops->pf, skb, NULL, NULL);
+	th = colo_get_tcphdr(ops->pf, skb, NULL, NULL, NULL);
 	if (th == NULL)
 		return NF_DROP;
 
@@ -200,7 +200,7 @@ static int colo_secondary_tg_check(const struct xt_tgchk_param *par)
 
 	node = colo_node_get(info->index);
 	if (node == NULL) {
-		pr_dbg("Can not find colo node whose index is %d\n", info->index);
+		pr_err("Can not find colo node whose index is %d\n", info->index);
 		return -EINVAL;
 	}
 
@@ -290,15 +290,19 @@ static int colo_secondary_init(void)
 	pr_dbg("register_hooks\n");
 	err = nf_register_hooks(colo_secondary_ops,
 				ARRAY_SIZE(colo_secondary_ops));
-	if (err < 0)
+	if (err < 0) {
+		pr_err("nf_register_hooks failed\n");
 		goto err;
+	}
 
 	pr_dbg("register targets\n");
 	err = xt_register_targets(colo_secondary_tg_regs,
 				  ARRAY_SIZE(colo_secondary_tg_regs));
 
-	if (err < 0)
+	if (err < 0) {
+		pr_err("xt_register_targets failed\n");
 		goto err1;
+	}
 
 	return 0;
 err1:

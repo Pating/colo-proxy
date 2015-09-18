@@ -126,7 +126,7 @@ __colo_compare_common(struct colo_primary *colo,
 				      u32 *, u32, u32, u32, u8 *),
 		      bool (*pre_compare)(struct nf_conn_colo *,
 					  struct nf_queue_entry *,
-					  u32 *, u32))
+					  u32 *, u32, u32 *))
 {
 	struct nf_queue_entry *e, *n;
 	LIST_HEAD(master_head);
@@ -135,7 +135,7 @@ __colo_compare_common(struct colo_primary *colo,
 	bool sort = false;
 	bool checkpoint = false;
 	union nf_conn_colo_tcp *p = NULL;
-	u32 max_ack = 0, compared_seq;
+	u32 max_ack = 0, compared_seq, retrans = 0;
 	u32 swin = 0; u16 mscale = 1;
 	u8 free, times = 0;
 
@@ -145,7 +145,7 @@ __colo_compare_common(struct colo_primary *colo,
 	skb_queue_head_init(&slaver_head);
 
 	if (nf_ct_protonum((struct nf_conn *)conn->nfct) == IPPROTO_TCP) {
-		p = (union nf_conn_colo_tcp *) conn->proto;
+		p = &conn->proto;
 	}
 
 	spin_lock_bh(&conn->lock);
@@ -216,9 +216,15 @@ restart:
 			goto restart;
 		}
 		/* ugly, entry is freed & handled by pre_compare */
-		if (pre_compare && pre_compare(conn, e, &compared_seq, max_ack))
+		if (pre_compare && pre_compare(conn, e, &compared_seq, max_ack, &retrans) &&
+			retrans < 3)
 			continue;
 
+		if (unlikely(retrans >= 3)) {
+			checkpoint = true;
+			pr_dbg("retrans %u exceed 3, do checkpoint\n", retrans);
+			break;
+		}
 next:
 		if (skb == NULL) {
 			struct nf_conn *ct = (struct nf_conn *) conn->nfct;
@@ -226,7 +232,7 @@ next:
 			if (test_bit(IPS_DYING_BIT, &ct->status)) {
 				/* timeout, it's a long time, there is something wrong
 				 * with slaver, we should help him. */
-				pr_dbg("conn %p timeout, should do checkpoint\n", ct);
+				pr_err("DO checkpoint, reason: conn %p timeout, should do checkpoint\n", ct);
 				checkpoint = true;
 			}
 
@@ -292,7 +298,7 @@ static bool colo_compare_other_skb(struct sk_buff *skb,
 	*free = COLO_COMPARE_FREE_MASTER | COLO_COMPARE_FREE_SLAVER;
 
 	if (skb->len != skb1->len) {
-		pr_dbg("master skb length %d, slaver length %d\n",
+		pr_err("DO checkpoint, reason: master skb length %d, slaver length %d\n",
 			skb->len, skb1->len);
 		return false;
 	}
@@ -322,7 +328,7 @@ static bool colo_compare_icmp_skb(struct sk_buff *skb,
 				return false;
 		}
 	} else {
-		pr_dbg("master type,code %u:%u, slaver %u:%u\n",
+		pr_err("DO checkpoint, reason: master type,code %u:%u, slaver %u:%u\n",
 			cb->type, cb->code, cb1->type, cb1->code);
 		return false;
 	}
@@ -343,7 +349,7 @@ static bool colo_compare_udp_skb(struct sk_buff *skb,
 	*free = COLO_COMPARE_FREE_MASTER | COLO_COMPARE_FREE_SLAVER;
 
 	if (skb->len != skb1->len) {
-		pr_dbg("master skb length %d, slaver length %d\n",
+		pr_err("Do checkpoint, reason: master skb length %d, slaver length %d\n",
 			skb->len, skb1->len);
 		return false;
 	}
@@ -352,7 +358,7 @@ static bool colo_compare_udp_skb(struct sk_buff *skb,
 	cb1 = COLO_SKB_CB(skb1);
 
 	if (cb->size != cb1->size) {
-		pr_dbg("master udp payload %u, slaver payload %u\n",
+		pr_err("DO checkpoint, reason: master udp payload %u, slaver payload %u\n",
 			cb->size, cb1->size);
 		return false;
 	}
@@ -391,12 +397,13 @@ static void colo_compare_udp(struct colo_primary *colo,
 static bool colo_pre_compare_tcp_skb(struct nf_conn_colo *conn,
 				     struct nf_queue_entry *e,
 				     u32 *compared_seq,
-				     u32 max_ack)
+				     u32 max_ack, u32 *retrans)
 {
 	struct sk_buff *skb = e->skb;
 	struct colo_tcp_cb *cb = COLO_SKB_CB(skb);
-	union nf_conn_colo_tcp *p = (union nf_conn_colo_tcp *) conn->proto;
+	union nf_conn_colo_tcp *p = &conn->proto;
 	u32 win = cb->win << p->p.mscale;
+	u32 ssack = p->p.ssack;
 
 	pr_dbg("master skb seq %u, end %u, ack %u, max ack %u, compared_seq %u, win %u, slaver win %u\n",
 		cb->seq, cb->seq_end, cb->ack, max_ack, *compared_seq, win, p->p.swin);
@@ -414,8 +421,11 @@ static bool colo_pre_compare_tcp_skb(struct nf_conn_colo *conn,
 		return false;
 	} else if (!after(cb->seq_end, *compared_seq)) {
 		if(after(cb->ack, max_ack)) {
-			pr_dbg("%u wait for slaver's ack %u\n",
-				cb->ack, max_ack);
+			pr_dbg("%u wait for slaver's ack %u, slave sack %u\n",
+				cb->ack, max_ack, ssack);
+			if (ssack && before(ssack, cb->ack)) {
+				*retrans = *retrans + 2;
+			}
 			return true;
 		}
 
@@ -425,6 +435,7 @@ static bool colo_pre_compare_tcp_skb(struct nf_conn_colo *conn,
 
 			if (!new_win) {
 				pr_dbg("slaver send zero window packet, help slaver, do checkpoint\n");
+				*retrans += 6;
 				return false;
 			}
 
@@ -465,7 +476,7 @@ static bool colo_compare_tcp_skb(struct sk_buff *skb,
 	/* both rst packet */
 	if (unlikely(cb->rst || cb1->rst)) {
 		if ((cb->rst ^ cb1->rst) || (cb->seq_end != cb1->seq_end)) {
-			pr_dbg("rst diff cb %d, seq_end %u, cb1 %d, seq_end %u\n",
+			pr_err("DO checkpoint, reason: rst diff cb %d, seq_end %u, cb1 %d, seq_end %u\n",
 				cb->rst, cb->seq_end, cb1->rst, cb1->seq_end);
 			return false;
 		}
@@ -487,7 +498,7 @@ static bool colo_compare_tcp_skb(struct sk_buff *skb,
 	}
 
 	/* start must be same */
-	if (WARN_ONCE(cb->seq != cb1->seq, "master seq %u slaver seq %u",
+	if (WARN_ONCE(cb->seq != cb1->seq, "DO checkpoint, reason: master seq %u slaver seq %u",
 		      cb->seq, cb1->seq))
 		return false;
 
@@ -529,14 +540,14 @@ static bool colo_compare_tcp_skb(struct sk_buff *skb,
 		cb->seq_end -= 1;
 	} else if (cb1->fin && !cb->fin) {
 		if (!after(cb1->seq_end, cb->seq_end)) {
-			pr_dbg("slaver fin packet seq is %u while master packet seq %u\n",
+			pr_err("DO checkpoint: reason: slaver fin packet seq is %u while master packet seq %u\n",
 				cb1->seq_end, cb->seq_end);
 			return false;
 		}
 		cb1->seq_end -= 1;
 	} else if (!cb1->fin && cb->fin) {
 		if (!after(cb->seq_end, cb1->seq_end)) {
-			pr_dbg("master fin packet seq is %u while slaver packet seq %u\n",
+			pr_err("DO checkpoint: reason: master fin packet seq is %u while slaver packet seq %u\n",
 				cb->seq_end, cb1->seq_end);
 			return false;
 		}
@@ -549,8 +560,10 @@ compare:
 		u32 len = cb->seq_end - cb->seq;
 		u32 seq_end = cb->seq_end;
 
-		if (!colo_compare_skb(skb, skb1, cb->dataoff, cb1->dataoff, len))
+		if (!colo_compare_skb(skb, skb1, cb->dataoff, cb1->dataoff, len)) {
+			pr_err("DO checkpoint: reason: payload is not consisted(if)\n");
 			return false;
+		}
 
 		/* data is consist */
 		/* restore fin packet, get ready for next round */
@@ -583,8 +596,10 @@ compare:
 	} else {
 		u32 len = cb1->seq_end - cb1->seq;
 
-		if (!colo_compare_skb(skb, skb1, cb->dataoff, cb1->dataoff, len))
+		if (!colo_compare_skb(skb, skb1, cb->dataoff, cb1->dataoff, len)) {
+			pr_err("DO checkpoint: reason: payload is not consisted(else)\n");
 			return false;
+		}
 
 		/* master packet is longer than skaver packet, compare the
 		 * same part, and move the seq & dataoff */
@@ -607,6 +622,8 @@ static void colo_compare_tcp(struct colo_primary *colo,
 				     colo_compare_tcp_skb,
 				     colo_pre_compare_tcp_skb);
 }
+
+void static colo_release_all_conn(struct colo_node *node);
 
 static int kcolo_thread(void *dummy)
 {
@@ -640,6 +657,7 @@ static int kcolo_thread(void *dummy)
 		list_move_tail(&conn->conn_list, &node->wait_list);
 
 		spin_unlock_bh(&node->lock);
+		rcu_read_lock();
 
 		// get reference, the last nf_reinject may trigger conntrack destruction.
 		nf_conntrack_get(conn->nfct);
@@ -655,6 +673,8 @@ static int kcolo_thread(void *dummy)
 		}
 		// release the reference, this conntrack can go now
 		nf_conntrack_put(conn->nfct);
+
+		rcu_read_unlock();
 	}
 
 	pr_dbg("kcolo_thread %d exit\n", node->vm_pid);
@@ -709,14 +729,14 @@ static int colo_enqueue_tcp_packet(struct nf_conn_colo *conn,
 {
 	struct sk_buff *skb = entry->skb;
 	struct tcphdr *th;
-	union nf_conn_colo_tcp *proto = (union nf_conn_colo_tcp *) conn->proto;
+	union nf_conn_colo_tcp *proto = &conn->proto;
 	struct colo_tcp_cb *cb, *cb1;
 	struct nf_queue_entry *e, *e_next;
 
 	cb = COLO_SKB_CB(skb);
 
 	th = colo_get_tcphdr(nf_ct_l3num((struct nf_conn*) conn->nfct),
-			     skb, cb, &proto->p.mscale);
+			     skb, cb, &proto->p.mscale, NULL);
 
 	if (th == NULL)
 		return -1;
@@ -819,9 +839,11 @@ static int colo_enqueue_packet(struct nf_queue_entry *entry, unsigned int ptr)
 
 	ct = nf_ct_get(skb, &ctinfo);
 
+	rcu_read_lock();
 	conn = nfct_colo(ct);
 
 	if (conn == NULL) {
+		rcu_read_unlock();
 		pr_dbg("colo_enqueue_packet colo isn't exist\n");
 		return -1;
 	}
@@ -835,16 +857,18 @@ static int colo_enqueue_packet(struct nf_queue_entry *entry, unsigned int ptr)
 #else
 	if (entry->hook != NF_INET_PRE_ROUTING) {
 #endif
+		rcu_read_unlock();
 		pr_dbg("packet is not on pre routing chain\n");
 		return -1;
 	}
 
 	node = colo_node_get(conn->vm_pid);
 	if (!node) {
+		rcu_read_unlock();
 		pr_dbg("%s: Could not find node: %d\n",__func__, conn->vm_pid);
-		return -1;
+		nf_reinject(entry, NF_STOP);
+		return 0;
 	}
-
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 1, 0)
 	switch (entry->state.pf) {
 #else
@@ -883,7 +907,8 @@ static int colo_enqueue_packet(struct nf_queue_entry *entry, unsigned int ptr)
 	spin_unlock_bh(&conn->lock);
 
 	if (ret < 0) {
-		colo_node_put (node);
+		rcu_read_unlock();
+		colo_node_put(node);
 		return ret;
 	}
 
@@ -891,6 +916,11 @@ static int colo_enqueue_packet(struct nf_queue_entry *entry, unsigned int ptr)
 	list_move_tail(&conn->conn_list, &node->conn_list);
 	wake_up_interruptible(&node->u.p.wait);
 	spin_unlock_bh(&node->lock);
+
+	rcu_read_unlock();
+
+	if (node->u.p.status == COLO_TG_DESTROYED)
+		colo_release_all_conn(node);
 
 	colo_node_put(node);
 
@@ -946,7 +976,7 @@ colo_slaver_enqueue_tcp_packet(struct nf_conn_colo *conn,
 			       struct sk_buff *skb)
 {
 	struct tcphdr *th;
-	union nf_conn_colo_tcp *proto = (union nf_conn_colo_tcp *) conn->proto;
+	union nf_conn_colo_tcp *proto = &conn->proto;
 	struct colo_tcp_cb *cb;
 	bool stolen = false;
 	u32 win;
@@ -954,22 +984,26 @@ colo_slaver_enqueue_tcp_packet(struct nf_conn_colo *conn,
 	cb = COLO_SKB_CB(skb);
 
 	th = colo_get_tcphdr(nf_ct_l3num((struct nf_conn *) conn->nfct),
-			     skb, cb, &proto->p.sscale);
+			     skb, cb, &proto->p.sscale, &proto->p.ssack);
 
 	if (th == NULL) {
 		pr_dbg("get tcphdr of slaver packet failed\n");
 		return NF_DROP;
 	}
 
-	pr_dbg("DEBUG: slaver: conn %p enqueue skb seq %u, seq_end %u, ack %u, sack %u, LEN: %u\n",
-		conn, cb->seq, cb->seq_end, cb->ack, proto->p.sack, cb->seq_end - cb->seq);
+	pr_dbg("DEBUG: slaver: conn %p enqueue skb seq %u, seq_end %u, ack %u, sack %u, s[sack] %u, LEN: %u\n",
+		conn, cb->seq, cb->seq_end, cb->ack, proto->p.sack, proto->p.ssack, cb->seq_end - cb->seq);
 
 	if (before(proto->p.sack, cb->ack)) {
 		proto->p.sack = cb->ack;
 		stolen = true;
 	}
 
-	pr_dbg("slaver max ack %u, rcv_nxt is %u\n", proto->p.sack, proto->p.srcv_nxt);
+	if (proto->p.ssack && before(proto->p.ssack, proto->p.sack)) {
+		proto->p.ssack = 0;
+	}
+
+	pr_dbg("slaver max ack %u, rcv_nxt is %u, s[sack] %u\n", proto->p.sack, proto->p.srcv_nxt, proto->p.ssack);
 
 	win = cb->win << proto->p.sscale;
 	if (th->syn) {
@@ -1175,9 +1209,9 @@ colo_slaver_queue_hook(const struct nf_hook_ops *ops, struct sk_buff *skb,
 	skb->nfct = &ct->ct_general;
 
 	conn = nfct_colo(ct);
-	if (conn == NULL) {
+	if (conn == NULL || !conn->init) {
 		/* this is rare, since conntrack is created when client's first packet coming */
-		pr_dbg("no colo conn\n");
+		pr_dbg("no colo conn %p\n", conn);
 		goto out_unlock;
 	}
 
@@ -1198,6 +1232,10 @@ colo_slaver_queue_hook(const struct nf_hook_ops *ops, struct sk_buff *skb,
 	list_move_tail(&conn->conn_list, &node->conn_list);
 	wake_up_interruptible(&node->u.p.wait);
 	spin_unlock_bh(&node->lock);
+
+	if (node->u.p.status == COLO_TG_DESTROYED)
+		colo_release_all_conn(node);
+
 out:
 	colo_node_put(node);
 out_unlock:
@@ -1266,7 +1304,7 @@ static struct nf_hook_ops colo_primary_ops[] __read_mostly = {
 static void colo_tcp_do_checkpoint(struct nf_conn_colo *conn)
 {
 	struct nf_queue_entry *e, *n;
-	union nf_conn_colo_tcp *proto = (union nf_conn_colo_tcp *) conn->proto;
+	union nf_conn_colo_tcp *proto = &conn->proto;
 
 	spin_lock_bh(&conn->lock);
 	proto->p.compared_seq = proto->p.mrcv_nxt;
@@ -1284,6 +1322,7 @@ static void colo_tcp_do_checkpoint(struct nf_conn_colo *conn)
 	__skb_queue_purge(&conn->slaver_pkt_queue);
 	proto->p.srcv_nxt = proto->p.mrcv_nxt;
 	proto->p.sack = proto->p.mack;
+	proto->p.ssack = 0;
 	proto->p.sscale = proto->p.mscale;
 
 	spin_unlock_bh(&conn->slaver_pkt_queue.lock);
@@ -1319,7 +1358,6 @@ static int primary_do_checkpoint(struct colo_node *node)
 		                         struct nf_conn_colo,
 		                         conn_list);
 
-		nf_conntrack_get (conn->nfct);
 		list_move_tail (&conn->conn_list, &node->wait_list);
 		spin_unlock_bh (&node->lock);
 
@@ -1336,7 +1374,6 @@ static int primary_do_checkpoint(struct colo_node *node)
 			colo_other_do_checkpoint (conn);
 		}
 		spin_unlock (&conn->chk_lock);
-		nf_conntrack_put (conn->nfct);
 
 		spin_lock_bh (&node->lock);
 	}
@@ -1353,7 +1390,7 @@ static void colo_setup_checkpoint_by_id(u32 id) {
 			id, node);
 		colo_send_checkpoint_req(&node->u.p);
 	}
-        colo_node_put(node);
+	colo_node_put(node);
 }
 
 static void colo_primary_cleanup_conn(struct nf_conn_colo *conn)
@@ -1374,9 +1411,32 @@ static void colo_primary_cleanup_conn(struct nf_conn_colo *conn)
 	spin_unlock_bh(&conn->lock);
 }
 
+void static colo_release_all_conn(struct colo_node *node)
+{
+	struct nf_conn_colo *conn;
+
+	for (;;) {
+		spin_lock_bh(&node->lock);
+
+		list_splice_init(&node->wait_list, &node->conn_list);
+
+		if (!list_empty(&node->conn_list)) {
+			conn = list_first_entry(&node->conn_list,
+						struct nf_conn_colo,
+						conn_list);
+			list_del_init(&conn->conn_list);
+			spin_unlock_bh(&node->lock);
+		} else {
+			spin_unlock_bh(&node->lock);
+			return;
+		}
+
+		colo_primary_cleanup_conn(conn);
+	}
+}
+
 static void colo_primary_destroy_node(struct colo_node *node)
 {
-	struct nf_conn_colo *conn = NULL;
 	struct task_struct *task;
 
 	spin_lock_bh(&node->lock);
@@ -1384,34 +1444,14 @@ static void colo_primary_destroy_node(struct colo_node *node)
 	task = node->u.p.task;
 	if (task)
 		node->u.p.task = NULL;
+	node->u.p.status = COLO_TG_DESTROYED;
 	spin_unlock_bh(&node->lock);
 
 	if (task)
 		kthread_stop(task);
-next:
-	spin_lock_bh(&node->lock);
 
-	list_splice_init(&node->wait_list, &node->conn_list);
-
-	if (!list_empty(&node->conn_list)) {
-		conn = list_first_entry(&node->conn_list,
-					struct nf_conn_colo,
-					conn_list);
-
-		nf_conntrack_get(conn->nfct);
-		list_del_init(&conn->conn_list);
-		spin_unlock_bh(&node->lock);
-	} else {
-		spin_unlock_bh(&node->lock);
-		module_put(THIS_MODULE);
-		return;
-	}
-
-	colo_primary_cleanup_conn(conn);
-
-	nf_conntrack_put(conn->nfct);
-
-	goto next;
+	colo_release_all_conn(node);
+	module_put(THIS_MODULE);
 }
 
 static void colo_primary_destroy(struct colo_node *node)
@@ -1450,6 +1490,7 @@ static int setup_forward_netdev(const char *dev_name)
 		}
 
 		if (fw_dev->rfc == INT_MAX) {
+			pr_err("forward device reference overflow\n");
 			ret = -EBUSY;
 			goto err;
 		}
@@ -1464,14 +1505,14 @@ static int setup_forward_netdev(const char *dev_name)
 	pr_dbg("Register %s as a forward device\n", dev_name);
 	fw_dev = kzalloc(sizeof(*fw_dev), GFP_KERNEL);
 	if (!fw_dev) {
-		pr_dbg("Can not alloc memory for ptype\n");
+		pr_err("Can not alloc memory for ptype\n");
 		ret = -ENOMEM;
 		goto err;
 	}
 
 	fw_dev->ptype.dev = dev_get_by_name(&init_net, dev_name);
 	if (fw_dev->ptype.dev == NULL) {
-		pr_dbg("Can't find net device %s\n", dev_name);
+		pr_err("Can't find net device %s\n", dev_name);
 		ret = -EINVAL;
 		goto err;
 	}
@@ -1484,7 +1525,7 @@ static int setup_forward_netdev(const char *dev_name)
 	ret = dev_set_promiscuity(fw_dev->ptype.dev, 1);
 	rtnl_unlock();
 	if (ret < 0) {
-		pr_dbg("dev_set_promiscuity failed\n");
+		pr_err("dev_set_promiscuity failed\n");
 		goto err_promiscuity;
 	}
 
@@ -1548,7 +1589,7 @@ static int colo_primary_tg_check(const struct xt_tgchk_param *par)
 	}
 	colo = &node->u.p;
 
-	if (colo->task) {
+	if (colo->status != COLO_TG_NONE) {
 		pr_dbg("node %d already been initialized\n", info->index);
 		/* already initialized by other rules */
 		goto out;
@@ -1568,6 +1609,7 @@ static int colo_primary_tg_check(const struct xt_tgchk_param *par)
 	/* init primary info */
 
 	spin_lock_bh(&node->lock);
+	colo->status = COLO_TG_RUNNING;
 	node->destroy_notify_cb = colo_primary_destroy;
 	node->do_checkpoint_cb = primary_do_checkpoint;
 	spin_unlock_bh(&node->lock);
@@ -1589,6 +1631,8 @@ static void colo_primary_tg_destroy(const struct xt_tgdtor_param *par)
 
 	node = container_of(info->colo, struct colo_node, u.p);
 	cleanup_forward_netdev(info->forward_dev);
+	if (node->u.p.status == COLO_TG_DESTROYED)
+		colo_release_all_conn(node);
 	colo_node_put(node);
 }
 

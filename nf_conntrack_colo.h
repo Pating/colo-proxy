@@ -33,6 +33,8 @@ union nf_conn_colo_tcp {
 		u32			compared_seq;
 		u32			master_snd_nxt;
 		u32			slaver_snd_nxt;
+
+		u32			ssack;
 	} p;
 
 	struct {
@@ -42,6 +44,7 @@ union nf_conn_colo_tcp {
 };
 
 struct nf_conn_colo {
+	struct rcu_head rcu;
 	struct list_head	conn_list;
 	struct list_head	entry_list;
 	struct sk_buff_head	slaver_pkt_queue;
@@ -50,13 +53,25 @@ struct nf_conn_colo {
 	spinlock_t		chk_lock;
 	u32			flags;
 	u32			vm_pid; /* Distinguish which VM it belongs to .*/
-	char			proto[];
+	bool			init;
+	union nf_conn_colo_tcp	proto;
 };
+
+struct nf_ct_ext_colo {
+	struct nf_conn_colo *conn;
+};
+
+static inline
+struct nf_ct_ext_colo *__nfct_colo(const struct nf_conn *ct)
+{
+	return (struct nf_ct_ext_colo *)nf_ct_ext_find(ct, NF_CT_EXT_COLO);
+}
 
 static inline
 struct nf_conn_colo *nfct_colo(const struct nf_conn *ct)
 {
-	return (struct nf_conn_colo *) nf_ct_ext_find(ct, NF_CT_EXT_COLO);
+	struct nf_ct_ext_colo *colo = __nfct_colo(ct);
+	return colo ? colo->conn : NULL;
 }
 
 struct nf_conn_colo *
