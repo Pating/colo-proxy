@@ -1,0 +1,37 @@
+From 481eea89585e8fff4a2211aaeca3276b3acfa312 Mon Sep 17 00:00:00 2001
+From: Li Zhijian <lizhijian@cn.fujitsu.com>
+Date: Thu, 6 Aug 2015 13:25:26 +0800
+Subject: [PATCH] skip check tcp in_windows if conntrak has COLO externsion
+
+in secondary side, before we adjust seq number([syn] [syn,ack] [ack])
+the tcp in_window check will fail because the invalid [s]ack. that may
+lead to we can not get the netfilter conntrack(skb->nfct) so that we
+can not adjust the seq number
+
+this hack modification is urgly, but it's effective.
+primary maybe has same issue.
+
+*I DO not really want to touch kernel code*, but i have no choice
+
+Signed-off-by: Li Zhijian <lizhijian@cn.fujitsu.com>
+---
+ net/netfilter/nf_conntrack_proto_tcp.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/net/netfilter/nf_conntrack_proto_tcp.c b/net/netfilter/nf_conntrack_proto_tcp.c
+index d87b642..78c2021 100644
+--- a/net/netfilter/nf_conntrack_proto_tcp.c
++++ b/net/netfilter/nf_conntrack_proto_tcp.c
+@@ -1004,6 +1004,9 @@ static int tcp_packet(struct nf_conn *ct,
+ 		break;
+ 	}
+ 
++	if (nf_ct_ext_find(ct, NF_CT_EXT_COLO))
++		goto in_window;
++
+ 	if (!tcp_in_window(ct, &ct->proto.tcp, dir, index,
+ 			   skb, dataoff, th, pf)) {
+ 		spin_unlock_bh(&ct->lock);
+-- 
+1.7.12.4
+
